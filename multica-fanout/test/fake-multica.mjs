@@ -57,10 +57,11 @@ const state = loadState();
 
 function newIssue(fields) {
   const id = uuid();
-  const key = `MUL-${state.seq++}`;
+  // 模拟真实 API：编号字段是 identifier（VC-xxx），不是 key
+  const identifier = `VC-${state.seq++}`;
   const issue = {
     id,
-    key,
+    identifier,
     title: fields.title || '',
     description: fields.description || '',
     status: fields.status || 'todo',
@@ -73,7 +74,7 @@ function newIssue(fields) {
     createdAt: new Date().toISOString(),
   };
   state.issues[id] = issue;
-  state.issues[key] = issue;
+  state.issues[identifier] = issue;
   saveState(state);
   return issue;
 }
@@ -92,10 +93,10 @@ function out(obj) {
 }
 
 // 3 段命令特判：issue comment add / issue comment list
-// 评论按 issue 的 id 与 key 双键存储，保证用任一引用都能读写
+// 评论按 issue 的 id 与 identifier 双键存储，保证用任一引用都能读写
 function commentKeys(ref) {
   const issue = state.issues[ref];
-  return issue ? [issue.id, issue.key] : [ref];
+  return issue ? [issue.id, issue.identifier] : [ref];
 }
 if (head3 === 'issue comment add') {
   const id = args[3];
@@ -143,7 +144,7 @@ switch (head2) {
         parent._children = parent._children || [];
         parent._children.push(issue);
         state.issues[parent.id] = parent;
-        state.issues[parent.key] = parent;
+        state.issues[parent.identifier] = parent;
         saveState(state);
       }
     }
@@ -167,9 +168,9 @@ switch (head2) {
       process.stderr.write('issue not found\n');
       process.exit(1);
     }
-    const kids = (issue._children || []).map((k) => state.issues[k.id] || state.issues[k.key] || k);
-    // 模拟真实返回：按 stage 分组
-    out({ 1: kids });
+    const kids = (issue._children || []).map((k) => state.issues[k.id] || state.issues[k.identifier] || k);
+    // 模拟真实返回：{ stages, total, unstaged }
+    out({ stages: [], total: kids.length, unstaged: kids });
     break;
   }
   case 'issue status': {
@@ -181,9 +182,9 @@ switch (head2) {
       process.exit(1);
     }
     issue.status = status;
-    // id 键与 key 键同步，保证任意引用都读到最新状态
+    // id 键与 identifier 键同步，保证任意引用都读到最新状态
     state.issues[issue.id] = issue;
-    state.issues[issue.key] = issue;
+    state.issues[issue.identifier] = issue;
     saveState(state);
     out(issue);
     break;
@@ -205,7 +206,7 @@ switch (head2) {
       issue.assignee = flag('--to');
     }
     state.issues[issue.id] = issue;
-    state.issues[issue.key] = issue;
+    state.issues[issue.identifier] = issue;
     saveState(state);
     out(issue);
     break;

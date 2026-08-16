@@ -159,26 +159,61 @@ export function dispatch(opts) {
 }
 
 /**
+ * 展平 issue children 返回（兼容多种结构）：
+ *   - 真实：{ stages: [{stage, children?}], total, unstaged: [...] }
+ *   - fake ：{ 1: [...] }（按 stage 分组）
+ *   - 纯数组
+ */
+function flattenChildren(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (!raw || typeof raw !== 'object') return [];
+  const out = [];
+  if (Array.isArray(raw.unstaged)) out.push(...raw.unstaged);
+  if (Array.isArray(raw.stages)) {
+    for (const s of raw.stages) {
+      if (Array.isArray(s.children)) out.push(...s.children);
+      else if (Array.isArray(s.issues)) out.push(...s.issues);
+      else if (s && typeof s === 'object' && s.issue) out.push(s.issue);
+    }
+  }
+  // 兜底：其余数组字段（如 fake 的 {1:[...]}）
+  for (const [k, v] of Object.entries(raw)) {
+    if (k === 'unstaged' || k === 'stages') continue;
+    if (Array.isArray(v)) out.push(...v);
+  }
+  return out;
+}
+
+/**
  * 状态聚合：列出父 Issue 下所有子 Issue 及状态
  */
 export function status(parentId) {
   m.checkAvailable();
   const parent = m.issueGet(parentId);
   const raw = m.issueChildren(parentId);
-  // children 可能按 stage 分组，或直接是数组
-  const groups = Array.isArray(raw) ? { default: raw } : raw;
-  const rows = [];
-  for (const [stage, list] of Object.entries(groups)) {
-    for (const c of Array.isArray(list) ? list : []) {
-      rows.push({
-        stage: stage === 'default' ? '-' : stage,
-        key: c.key || c.id || null,
-        title: c.title || '',
-        assignee: c.assigneeName || c.assignee || c.assigneeId || null,
-        status: c.status || '',
-      });
-    }
+  const kids = flattenChildren(raw);
+
+  // agent id → name 映射（真实 children 只有 assignee_id，没有名字）
+  let nameById = new Map();
+  try {
+    nameById = new Map(m.agentList().map((a) => [String(a.id), a.name]));
+  } catch {
+    /* 拉不到时用 id 兜底 */
   }
+
+  const rows = kids.map((c) => {
+    const n = m.normalizeIssue(c);
+    const assigneeId = n.assigneeId || n.assignee_id || null;
+    return {
+      stage: n.stage ?? '-',
+      key: n.key || n.id || null,
+      title: n.title || '',
+      assignee: n.assigneeName || n.assignee || (assigneeId ? nameById.get(String(assigneeId)) || assigneeId : null),
+      assigneeId,
+      status: n.status || '',
+    };
+  });
+
   return {
     parentKey: parent?.key || parentId,
     parentTitle: parent?.title || '',

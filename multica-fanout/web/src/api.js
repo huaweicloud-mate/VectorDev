@@ -24,15 +24,15 @@ export function listTools() {
   return request('/api/cli/tools').then((d) => d.tools);
 }
 
-/** 执行工具 action（统一入口） */
+/** 执行工具 action：POST body = 参数对象（如 { title, description, agents }） */
 export function runTool(toolId, action, params = {}) {
-  return request(`/api/cli/tools/${toolId}/${action}/run`, {
+  return request(`/api/cli/tools/${toolId}/${action}`, {
     method: 'POST',
-    body: JSON.stringify({ action, params }),
+    body: JSON.stringify(params),
   }).then((d) => d.data);
 }
 
-/** 工具 action 带路径参数（如 status/:parentId） */
+/** 工具 action 带路径参数（如 status/:parentId），body = 其余参数 */
 export function runToolWithPath(toolId, action, pathParam, params = {}) {
   return request(`/api/cli/tools/${toolId}/${action}/${encodeURIComponent(pathParam)}`, {
     method: 'POST',

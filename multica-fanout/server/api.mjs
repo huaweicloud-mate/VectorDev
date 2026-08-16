@@ -111,18 +111,10 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { tools: listTools() });
     }
 
-    const runMatch = p.match(/^\/api\/cli\/tools\/([^/]+)\/run$/);
-    if (runMatch && req.method === 'POST') {
-      const body = await readBody(req);
-      const result = await runAction(runMatch[1], body.action, {
-        body: body.params || body, // 兼容：直接传 params，或包一层
-      });
-      return sendJson(res, 200, result);
-    }
-
-    // 工具 action 带路径参数：/api/cli/tools/:id/:action/:param1
+    // 工具 action：POST /api/cli/tools/:toolId/:action（body = 参数对象）
+    // 带路径参数：POST /api/cli/tools/:toolId/:action/:param（如 status/:parentId）
     const actionMatch = p.match(/^\/api\/cli\/tools\/([^/]+)\/([^/]+)(?:\/(.+))?$/);
-    if (actionMatch) {
+    if (actionMatch && (req.method === 'GET' || req.method === 'POST')) {
       const [, toolId, action, rest] = actionMatch;
       const body = req.method === 'POST' ? await readBody(req) : {};
       const result = await runAction(toolId, action, {

@@ -87,6 +87,20 @@ function asArray(data) {
   return [];
 }
 
+/**
+ * 归一化 issue 对象：真实 API 用 `identifier`（如 VC-234）展示编号，
+ * 兼容我们代码中统一使用的 `key` 字段。
+ */
+export function normalizeIssue(issue) {
+  if (!issue || typeof issue !== 'object') return issue;
+  return {
+    ...issue,
+    id: issue.id,
+    key: issue.key || issue.identifier || null,
+    identifier: issue.identifier || issue.key || null,
+  };
+}
+
 // ------------------------------------------------------------
 // 基础能力检查
 // ------------------------------------------------------------
@@ -153,7 +167,7 @@ export function issueCreate(opts = {}) {
   if (opts.stage != null) args.push('--stage', String(opts.stage));
   if (opts.priority) args.push('--priority', opts.priority);
   if (opts.project) args.push('--project', opts.project);
-  return runJson(args);
+  return normalizeIssue(runJson(args));
 }
 
 function runWithInput(args, { description, ...opts }) {
@@ -165,7 +179,7 @@ function runWithInput(args, { description, ...opts }) {
   if (opts.stage != null) out.push('--stage', String(opts.stage));
   if (opts.priority) out.push('--priority', opts.priority);
   if (opts.project) out.push('--project', opts.project);
-  return runJsonWithInput(out, description);
+  return normalizeIssue(runJsonWithInput(out, description));
 }
 
 function runJsonWithInput(args, input) {
@@ -192,7 +206,7 @@ export function issueAssign(id, opts = {}) {
 
 /** 查看单个 issue */
 export function issueGet(id) {
-  return runJson(['issue', 'get', id]);
+  return normalizeIssue(runJson(['issue', 'get', id]));
 }
 
 /** 列出 issue（可按状态/负责人过滤） */
@@ -202,13 +216,12 @@ export function issueList(opts = {}) {
   if (opts.assignee) args.push('--assignee', opts.assignee);
   if (opts.limit) args.push('--limit', String(opts.limit));
   const data = runJson(args);
-  return asArray(data);
+  return asArray(data).map(normalizeIssue);
 }
 
-/** 列出子 issue（按阶段分组） */
+/** 列出子 issue（真实 CLI 需 --output json；返回 { stages, total, unstaged }） */
 export function issueChildren(id) {
-  const data = runJson(['issue', 'children', id]);
-  return data; // 结构可能是 { 1: [...], 2: [...] } 或数组，原样返回
+  return runJson(['issue', 'children', id, '--output', 'json']);
 }
 
 /** 评论列表 */
