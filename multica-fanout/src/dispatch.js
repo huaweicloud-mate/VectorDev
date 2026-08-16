@@ -707,3 +707,32 @@ export async function activateIssue(issueId) {
   await m.issueStatusAsync(issueId, 'todo');
   return { issueId, issueKey: issue.key || issue.identifier || null, status: 'todo' };
 }
+
+// ============================================================
+// 试运行（dry-run）与任务删除/归档
+// ============================================================
+
+/**
+ * 归档任务：Multica 侧把父+子全部置 cancelled（保留记录）
+ */
+export async function archiveTask(parentId) {
+  m.checkAvailable();
+  const raw = await m.issueChildrenAsync(parentId);
+  const kids = flattenChildren(raw);
+  const ids = [...kids.map((k) => k.id), parentId];
+  // 并行取消
+  await Promise.all(ids.map((id) => m.issueStatusAsync(id, 'cancelled').catch(() => null)));
+  return { parentId, archived: true, cancelled: ids.length };
+}
+
+/**
+ * 彻底删除任务：Multica 侧删除子+父（不可恢复）
+ */
+export async function deleteTask(parentId) {
+  m.checkAvailable();
+  const raw = await m.issueChildrenAsync(parentId).catch(() => null);
+  const kids = raw ? flattenChildren(raw) : [];
+  const ids = [...kids.map((k) => k.id), parentId];
+  const results = await Promise.all(ids.map((id) => m.issueDeleteAsync(id).then(() => true).catch(() => false)));
+  return { parentId, deleted: results.filter(Boolean).length, total: ids.length };
+}

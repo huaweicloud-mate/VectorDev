@@ -160,8 +160,65 @@ export default function TaskView() {
     }
   };
 
+  const doArchiveTask = async (t) => {
+    if (!window.confirm(`归档任务「${t.title}」？\n将把该任务所有子 Issue 置为 cancelled（保留记录）。`)) return;
+    setActing(true);
+    try {
+      await runToolWithPath('task-monitor', 'archive', t.id);
+      if (activeId === t.id) setActiveId(null);
+      loadTasks();
+    } catch (e) {
+      setDetailError(`归档失败：${e.message}`);
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const doDeleteTask = async (t) => {
+    if (!window.confirm(`彻底删除任务「${t.title}」？\nMultica 侧不可恢复，将删除父 Issue 与所有子 Issue。`)) return;
+    setActing(true);
+    try {
+      await runToolWithPath('task-monitor', 'delete', t.id);
+      if (activeId === t.id) setActiveId(null);
+      loadTasks();
+    } catch (e) {
+      setDetailError(`删除失败：${e.message}`);
+    } finally {
+      setActing(false);
+    }
+  };
+
   const activeTask = useMemo(() => (tasks || []).find((t) => t.id === activeId) || null, [tasks, activeId]);
   const nodeY = (i, n) => (n <= 1 ? 50 : 12 + (i * 76) / (n - 1));
+
+  // 任务过滤：进行中 / 已完成 / 已归档
+  const TASK_FILTERS = [
+    { key: 'all', label: '全部' },
+    { key: 'active', label: '进行中' },
+    { key: 'done', label: '已完成' },
+    { key: 'archived', label: '已归档' },
+  ];
+  const [taskFilter, setTaskFilter] = useState('all');
+  const filteredTasks = useMemo(() => {
+    const list = tasks || [];
+    if (taskFilter === 'all') return list;
+    return list.filter((t) => {
+      const s = t.status;
+      if (taskFilter === 'active') return ['todo', 'in_progress', 'in_review', 'backlog'].includes(s);
+      if (taskFilter === 'done') return s === 'done';
+      if (taskFilter === 'archived') return s === 'cancelled';
+      return true;
+    });
+  }, [tasks, taskFilter]);
+  const taskCount = useMemo(() => {
+    const c = { all: (tasks || []).length, active: 0, done: 0, archived: 0 };
+    for (const t of tasks || []) {
+      if (['todo', 'in_progress', 'in_review', 'backlog'].includes(t.status)) c.active += 1;
+      else if (t.status === 'done') c.done += 1;
+      else if (t.status === 'cancelled') c.archived += 1;
+    }
+    return c;
+  }, [tasks]);
 
   // 总-分-总 布局计算
   const layout = useMemo(() => {
@@ -187,8 +244,28 @@ export default function TaskView() {
       </header>
 
       {/* 任务选择器 */}
-      <div className="mb-5 flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
+      <div className="mb-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex rounded-lg border border-slate-200 bg-white p-0.5">
+            {TASK_FILTERS.map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => setTaskFilter(f.key)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  taskFilter === f.key ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'
+                }`}
+              >
+                {f.label} {taskCount[f.key] ?? 0}
+              </button>
+            ))}
+          </div>
+          <Button variant="secondary" onClick={loadTasks} className="!py-1.5 !px-3 text-xs">
+            刷新
+          </Button>
+        </div>
+
+        <div className="flex min-w-0 gap-2 overflow-x-auto pb-1">
           {tasksError ? (
             <ErrorState message={tasksError} onRetry={loadTasks} />
           ) : !tasks ? (
@@ -197,22 +274,30 @@ export default function TaskView() {
                 <Skeleton key={i} className="h-12 w-56" />
               ))}
             </div>
-          ) : tasks.length === 0 ? (
-            <EmptyState title="还没有任务" description="在「插件测试」派发一个多 Agent 任务后，会在这里显示整体进展。" />
+          ) : filteredTasks.length === 0 ? (
+            <div className="w-full rounded-xl border border-dashed border-slate-300 py-8 text-center text-sm text-slate-400">
+              {taskFilter === 'all' ? '还没有任务，去「插件测试」派发一个吧' : '当前筛选下没有任务'}
+            </div>
           ) : (
-            tasks.map((t) => {
+            filteredTasks.map((t) => {
               const on = t.id === activeId;
               const p = t.progress;
+              const archived = t.status === 'cancelled';
               return (
-                <button
+                <div
                   key={t.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setActiveId(t.id)}
-                  className={`shrink-0 rounded-xl border px-4 py-2.5 text-left transition-all ${
+                  onKeyDown={(e) => e.key === 'Enter' && setActiveId(t.id)}
+                  className={`group relative shrink-0 cursor-pointer rounded-xl border px-4 py-2.5 pr-9 text-left transition-all ${
                     on ? 'border-[#d97757]/50 bg-[#d97757]/5 ring-1 ring-[#d97757]/25' : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
+                  } ${archived ? 'opacity-60' : ''}`}
                 >
-                  <div className="max-w-56 truncate text-sm font-medium text-slate-800">{t.title}</div>
+                  <div className="max-w-56 truncate text-sm font-medium text-slate-800">
+                    {t.title}
+                    {archived && <Badge tone="neutral">已归档</Badge>}
+                  </div>
                   <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
                     <span>{t.key}</span>
                     {p && (
@@ -221,14 +306,32 @@ export default function TaskView() {
                       </span>
                     )}
                   </div>
-                </button>
+                  {/* 删除操作 */}
+                  <div className="absolute right-1.5 top-1.5 hidden gap-1 group-hover:flex" onClick={(e) => e.stopPropagation()}>
+                    {!archived && (
+                      <button
+                        type="button"
+                        title="归档（全部置 cancelled）"
+                        onClick={() => doArchiveTask(t)}
+                        className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-slate-200"
+                      >
+                        归档
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      title="彻底删除（不可恢复）"
+                      onClick={() => doDeleteTask(t)}
+                      className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] text-rose-600 hover:bg-rose-100"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
               );
             })
           )}
         </div>
-        <Button variant="secondary" onClick={loadTasks} className="shrink-0">
-          刷新
-        </Button>
       </div>
 
       {/* 进展图 */}

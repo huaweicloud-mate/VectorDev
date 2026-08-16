@@ -13,13 +13,14 @@
  *   POST approve/:id    → 审核通过（子任务 → done + 评论留痕）
  *   POST reject/:id     → 驳回（子任务 → todo + 评论留痕）
  */
-import { listTasks, taskDetail, agentDetail, agentPresence, reviewIssue, approveIssue, rejectIssue, startSummary, activateIssue } from '../../src/dispatch.js';
+import { listTasks, taskDetail, agentDetail, agentPresence, reviewIssue, approveIssue, rejectIssue, startSummary, activateIssue, archiveTask, deleteTask } from '../../src/dispatch.js';
 import { registerTool } from '../gateway.mjs';
 
 registerTool({
   id: 'task-monitor',
   name: '任务监控',
   description: '任务进展可视化：一次派发从起点到多 Agent 并行再到汇总的整体进展与实时工作查看',
+  parent: 'plugin-test', // 作为「插件测试」的二级菜单
   actions: {
     tasks: {
       method: 'GET',
@@ -79,6 +80,22 @@ registerTool({
       run: ({ params }) => {
         if (!params.parentId) throw Object.assign(new Error('缺少 issue id'), { status: 400 });
         return activateIssue(params.parentId);
+      },
+    },
+    // 删除任务：归档（全部 cancelled，保留记录）
+    archive: {
+      method: 'POST',
+      run: ({ params }) => {
+        if (!params.parentId) throw Object.assign(new Error('缺少任务 id'), { status: 400 });
+        return archiveTask(params.parentId);
+      },
+    },
+    // 删除任务：彻底删除（Multica 侧不可恢复）
+    delete: {
+      method: 'POST',
+      run: ({ params }) => {
+        if (!params.parentId) throw Object.assign(new Error('缺少任务 id'), { status: 400 });
+        return deleteTask(params.parentId);
       },
     },
   },

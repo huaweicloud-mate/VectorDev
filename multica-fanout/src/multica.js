@@ -400,6 +400,14 @@ export function issueStatus(id, status) {
   return runJson(['issue', 'status', id, status]);
 }
 
+/** 删除 issue（不可恢复） */
+export function issueDelete(id) {
+  return runJson(['issue', 'delete', id]);
+}
+export async function issueDeleteAsync(id) {
+  return runJsonAsync(['issue', 'delete', id]);
+}
+
 // ------------------------------------------------------------
 // Agent / Runtime / Task（实时工作监控）
 // ------------------------------------------------------------

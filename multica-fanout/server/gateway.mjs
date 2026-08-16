@@ -29,12 +29,13 @@ export function registerTool(tool) {
   tools.set(tool.id, tool);
 }
 
-/** 列出工具（供前端菜单渲染） */
+/** 列出工具（供前端菜单渲染；parent 表示作为某工具的二级菜单） */
 export function listTools() {
-  return [...tools.values()].map(({ id, name, description, actions }) => ({
+  return [...tools.values()].map(({ id, name, description, parent, actions }) => ({
     id,
     name,
     description: description || '',
+    parent: parent || null,
     actions: Object.entries(actions).map(([action, def]) => ({
       id: action,
       method: def.method || 'GET',
