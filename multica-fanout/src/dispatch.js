@@ -57,9 +57,12 @@ export function resolveAgents(agentNames, agentList) {
  * @returns 派发报告
  */
 export function dispatch(opts) {
-  const { title, description, viewpoints, status, stage, priority, project, parentOnly } = opts;
+  const { title, description, viewpoints, status, stage, priority, project, parentOnly, allowDuplicate } = opts;
 
   m.checkAvailable();
+
+  // executeNow：true=todo 立即执行（默认）；false=backlog 暂不执行（稍后手动激活）
+  const effectiveStatus = opts.executeNow === false ? 'backlog' : status || 'todo';
 
   // 1. 获取工作区智能体
   const agents = m.agentList();
@@ -86,7 +89,8 @@ export function dispatch(opts) {
   const parent = m.issueCreate({
     title: `[并行] ${title}`,
     description: parentDesc,
-    status: status || 'todo',
+    status: effectiveStatus,
+    allowDuplicate,
     priority,
     project,
   });
@@ -120,12 +124,13 @@ export function dispatch(opts) {
       child = m.issueCreate({
         title: `[${i + 1}/${count}] ${title}（${agent.name}）`,
         description: childDesc,
-        status: status || 'todo',
+        status: effectiveStatus,
         assignee: agent.name,
         parent: parentId,
         stage,
         priority,
         project,
+        allowDuplicate,
       });
     } catch (e) {
       // assignee 名称歧义等导致失败时，退化为：先创建、再用 ID 精确分配
@@ -133,11 +138,12 @@ export function dispatch(opts) {
       child = m.issueCreate({
         title: `[${i + 1}/${count}] ${title}（${agent.name}）`,
         description: childDesc,
-        status: status || 'todo',
+        status: effectiveStatus,
         parent: parentId,
         stage,
         priority,
         project,
+        allowDuplicate,
       });
       const childId = child.id || child.key;
       if (agent.id && agent.id !== childId) {
@@ -586,10 +592,10 @@ export async function rejectIssue(issueId, { comment = '需要修改' } = {}) {
 /**
  * 按「总-分-总」模板派发：
  *  - 父 issue（起点，无 Agent）
- *  - N 个并行 worker 子 issue（分，立即 todo 执行）
+ *  - N 个并行 worker 子 issue（分；executeNow=true 立即 todo 执行，否则 backlog 暂不执行）
  *  - 1 个汇总子 issue（第二个总，backlog 占位，等 worker 全 done 后由 startSummary 激活）
  */
-export async function dispatchSummarizeTemplate({ title, description, agents, summaryAgent, status = 'todo', priority, project }) {
+export async function dispatchSummarizeTemplate({ title, description, agents, summaryAgent, status = 'todo', priority, project, executeNow = true, allowDuplicate = false }) {
   m.checkAvailable();
   const allAgents = m.agentList();
   const workers = resolveAgents(agents, allAgents);
@@ -597,13 +603,18 @@ export async function dispatchSummarizeTemplate({ title, description, agents, su
   const summary = resolveAgents([summaryAgent], allAgents)[0];
   if (!summary) throw new Error('请选择汇总 Agent');
 
+  // executeNow=false → worker 全部 backlog（暂不执行，稍后在任务页激活）
+  const workerStatus = executeNow === false ? 'backlog' : status || 'todo';
+  const parentStatus = executeNow === false ? 'backlog' : status || 'todo';
+
   const parentDesc = buildParentDescription({ title, background: description, agentCount: workers.length });
   const parent = m.issueCreate({
     title: `[总分总] ${title}`,
     description: parentDesc,
-    status,
+    status: parentStatus,
     priority,
     project,
+    allowDuplicate,
   });
   const parentId = parent.id || parent.key;
   try { await m.issueMetadataSetAsync(parentId, 'fanout_task', 'true'); } catch { /* 忽略 */ }
@@ -624,11 +635,12 @@ export async function dispatchSummarizeTemplate({ title, description, agents, su
     const child = m.issueCreate({
       title: `[${i + 1}/${workers.length}] ${title}（${agent.name}）`,
       description: childDesc,
-      status,
+      status: workerStatus,
       assignee: agent.name,
       parent: parentId,
       priority,
       project,
+      allowDuplicate,
     });
     const childId = child.id || child.key;
     try { await m.issueMetadataSetAsync(childId, 'role', 'worker'); } catch { /* 忽略 */ }
@@ -652,6 +664,7 @@ export async function dispatchSummarizeTemplate({ title, description, agents, su
     parent: parentId,
     priority,
     project,
+    allowDuplicate,
   });
   const summId = summ.id || summ.key;
   try { await m.issueMetadataSetAsync(summId, 'role', 'summarizer'); } catch { /* 忽略 */ }
@@ -682,4 +695,15 @@ export async function startSummary(parentId) {
   }
   await m.issueStatusAsync(summ.id, 'todo');
   return { issueId: summ.id, issueKey: summ.key || summ.identifier || null, status: 'todo', agentName: summ.assignee || null };
+}
+
+/** 激活单个子任务：backlog → todo（暂不执行的任务稍后手动开始） */
+export async function activateIssue(issueId) {
+  m.checkAvailable();
+  const issue = await m.issueGetAsync(issueId);
+  if (issue.status !== 'backlog') {
+    throw Object.assign(new Error(`任务当前状态为 ${issue.status}，无需激活`), { status: 400 });
+  }
+  await m.issueStatusAsync(issueId, 'todo');
+  return { issueId, issueKey: issue.key || issue.identifier || null, status: 'todo' };
 }

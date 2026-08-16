@@ -39,6 +39,8 @@ export default function PluginTest() {
   const [formError, setFormError] = useState(null);
   const [mode, setMode] = useState('free'); // free | summary（总-分-总模板）
   const [summaryAgent, setSummaryAgent] = useState('');
+  const [executeNow, setExecuteNow] = useState(true); // 立即执行 / 暂不执行
+  const [allowDuplicate, setAllowDuplicate] = useState(false); // 允许同名任务
 
   const [dispatching, setDispatching] = useState(false);
   const [report, setReport] = useState(null);
@@ -91,18 +93,22 @@ export default function PluginTest() {
     setRows(null);
     try {
       const agentNames = available.filter((a) => selected.includes(a.id)).map((a) => a.name);
+      const common = {
+        title: title.trim(),
+        description: description.trim(),
+        executeNow,
+        allowDuplicate,
+      };
       const rep =
         mode === 'summary'
           ? await runTool('plugin-test', 'dispatch-summary', {
               template: 'summary',
-              title: title.trim(),
-              description: description.trim(),
+              ...common,
               agents: agentNames,
               summaryAgent,
             })
           : await runTool('plugin-test', 'dispatch', {
-              title: title.trim(),
-              description: description.trim(),
+              ...common,
               agents: agentNames,
             });
       setReport(rep);
@@ -339,6 +345,44 @@ export default function PluginTest() {
           </div>
         </div>
         {formError && <p className="mt-2 text-xs text-rose-600">{formError}</p>}
+
+        {/* 执行时机 + 同名选项 */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-100 pt-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-slate-500">执行时机</span>
+            <div className="flex rounded-lg border border-slate-200 p-0.5">
+              <button
+                type="button"
+                onClick={() => setExecuteNow(true)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  executeNow ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'
+                }`}
+              >
+                立即执行
+              </button>
+              <button
+                type="button"
+                onClick={() => setExecuteNow(false)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  !executeNow ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'
+                }`}
+              >
+                暂不执行
+              </button>
+            </div>
+            <span className="text-[11px] text-slate-400">暂不执行 = 任务先入 backlog，稍后在任务页手动激活</span>
+          </div>
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-500">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 accent-[#d97757]"
+              checked={allowDuplicate}
+              onChange={(e) => setAllowDuplicate(e.target.checked)}
+            />
+            允许创建同名任务
+          </label>
+        </div>
+
         {dispatchError && (
           <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50/60 px-3 py-2 text-sm text-rose-700">
             {dispatchError}

@@ -308,6 +308,7 @@ export function issueCreate(opts = {}) {
   if (opts.stage != null) args.push('--stage', String(opts.stage));
   if (opts.priority) args.push('--priority', opts.priority);
   if (opts.project) args.push('--project', opts.project);
+  if (opts.allowDuplicate) args.push('--allow-duplicate');
   return normalizeIssue(runJson(args));
 }
 
@@ -320,6 +321,7 @@ function runWithInput(args, { description, ...opts }) {
   if (opts.stage != null) out.push('--stage', String(opts.stage));
   if (opts.priority) out.push('--priority', opts.priority);
   if (opts.project) out.push('--project', opts.project);
+  if (opts.allowDuplicate) out.push('--allow-duplicate');
   return normalizeIssue(runJsonWithInput(out, description));
 }
 

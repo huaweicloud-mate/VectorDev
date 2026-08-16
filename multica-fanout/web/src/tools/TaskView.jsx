@@ -148,6 +148,18 @@ export default function TaskView() {
     }
   };
 
+  const doActivate = async (c) => {
+    setActing(true);
+    try {
+      await runToolWithPath('task-monitor', 'activate', c.id);
+      refreshDetail(activeId);
+    } catch (e) {
+      setDetailError(`激活失败：${e.message}`);
+    } finally {
+      setActing(false);
+    }
+  };
+
   const activeTask = useMemo(() => (tasks || []).find((t) => t.id === activeId) || null, [tasks, activeId]);
   const nodeY = (i, n) => (n <= 1 ? 50 : 12 + (i * 76) / (n - 1));
 
@@ -285,6 +297,18 @@ export default function TaskView() {
                       <div className="mt-1 flex items-center gap-1 text-[10px] text-[#b4542f]">
                         <Spinner className="h-2.5 w-2.5" />
                         执行中…
+                      </div>
+                    )}
+                    {c.status === 'backlog' && (
+                      <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          disabled={acting}
+                          onClick={() => doActivate(c)}
+                          className="rounded-md bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                        >
+                          开始执行
+                        </button>
                       </div>
                     )}
                     {c.status === 'in_review' && (

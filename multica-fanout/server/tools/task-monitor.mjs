@@ -13,7 +13,7 @@
  *   POST approve/:id    → 审核通过（子任务 → done + 评论留痕）
  *   POST reject/:id     → 驳回（子任务 → todo + 评论留痕）
  */
-import { listTasks, taskDetail, agentDetail, agentPresence, reviewIssue, approveIssue, rejectIssue, startSummary } from '../../src/dispatch.js';
+import { listTasks, taskDetail, agentDetail, agentPresence, reviewIssue, approveIssue, rejectIssue, startSummary, activateIssue } from '../../src/dispatch.js';
 import { registerTool } from '../gateway.mjs';
 
 registerTool({
@@ -71,6 +71,14 @@ registerTool({
       run: ({ params }) => {
         if (!params.parentId) throw Object.assign(new Error('缺少任务 id'), { status: 400 });
         return startSummary(params.parentId);
+      },
+    },
+    // 激活单个 backlog 子任务（暂不执行的任务稍后手动开始）
+    activate: {
+      method: 'POST',
+      run: ({ params }) => {
+        if (!params.parentId) throw Object.assign(new Error('缺少 issue id'), { status: 400 });
+        return activateIssue(params.parentId);
       },
     },
   },

@@ -48,6 +48,8 @@ registerTool({
           agents: body.agents,
           summaryAgent: body.summaryAgent,
           status: body.status || 'todo',
+          executeNow: body.executeNow !== false,
+          allowDuplicate: !!body.allowDuplicate,
         });
       },
     },
@@ -67,6 +69,8 @@ registerTool({
           stage: body.stage,
           priority: body.priority,
           project: body.project,
+          executeNow: body.executeNow !== false,
+          allowDuplicate: !!body.allowDuplicate,
         });
       },
     },
