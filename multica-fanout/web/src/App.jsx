@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import PluginTest from './tools/PluginTest.jsx';
+import TaskView from './tools/TaskView.jsx';
 import { listTools, health } from './api.js';
 
 /** 工具 ID → 页面组件映射（未来新增工具在此登记） */
 const TOOL_VIEWS = {
   'plugin-test': PluginTest,
+  'task-monitor': TaskView,
 };
 
 function parseHash() {

@@ -11,19 +11,8 @@
  *   POST aggregate/:id   → 聚合产出
  */
 import * as m from '../../src/multica.js';
-import { dispatch, status, aggregate } from '../../src/dispatch.js';
+import { dispatch, status, aggregate, agentPresence } from '../../src/dispatch.js';
 import { registerTool } from '../gateway.mjs';
-
-function normalizeAgent(a) {
-  return {
-    id: a.id,
-    name: a.name,
-    status: a.status || 'unknown',
-    archived: !!a.archived,
-    runtime: a.runtime || null,
-    model: a.model || null,
-  };
-}
 
 registerTool({
   id: 'plugin-test',
@@ -32,7 +21,8 @@ registerTool({
   actions: {
     agents: {
       method: 'GET',
-      run: () => m.agentList().map(normalizeAgent),
+      // 带存在状态：在线/离线/工作中（runtime 在线 + 运行中任务探测）
+      run: () => agentPresence(),
     },
     dispatch: {
       method: 'POST',

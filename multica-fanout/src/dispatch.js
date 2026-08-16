@@ -94,6 +94,13 @@ export function dispatch(opts) {
     throw new Error(`父 Issue 创建失败，返回异常：${JSON.stringify(parent)}`);
   }
 
+  // 打任务标记：父 issue 记为 fanout 任务（任务监控页用 metadata 过滤）
+  try {
+    m.issueMetadataSet(parentId, 'fanout_task', 'true');
+  } catch (e) {
+    console.error(`  ⚠ 任务标记写入失败（不影响派发）：${e.message}`);
+  }
+
   // 4. 逐个子 Issue（全部 todo → 并行认领执行）
   const children = [];
   for (let i = 0; i < count; i++) {
@@ -323,4 +330,198 @@ function sleepSync(ms) {
       /* noop */
     }
   }
+}
+
+// ============================================================
+// 任务监控（Task Monitor）：任务列表 / 任务详情进展图 / Agent 实时情况
+// ============================================================
+
+function normalizeAgentForMonitor(a) {
+  return {
+    id: a.id,
+    name: a.name,
+    status: a.status || 'unknown',
+    archived: !!a.archived,
+    runtime_bound: !!a.runtime_bound,
+    runtime_id: a.runtime_id || null,
+    runtime_mode: a.runtime_mode || null,
+    model: a.model || null,
+    max_concurrent_tasks: a.max_concurrent_tasks || null,
+  };
+}
+
+function summarizeTask(t) {
+  return {
+    id: t.id,
+    status: t.status,
+    attempt: t.attempt,
+    issueId: t.issue_id || null,
+    createdAt: t.created_at || null,
+    dispatchedAt: t.dispatched_at || null,
+    startedAt: t.started_at || null,
+    completedAt: t.completed_at || null,
+    workDir: t.work_dir || t.relative_work_dir || null,
+    error: t.error || null,
+    resultPreview: (t.result?.output || '').slice(0, 300) || null,
+  };
+}
+
+const ACTIVE_TASK_STATUS = new Set(['dispatched', 'claimed', 'running']);
+
+/** 任务列表：metadata 标记的 fanout 父任务（并行拉取各任务进度） */
+export async function listTasks() {
+  m.checkAvailable();
+  const issues = m.issueList({ metadata: 'fanout_task=true' });
+  // 并行计算每个任务的子任务进度
+  const tasks = await Promise.all(
+    issues.map(async (i) => {
+      let progress = null;
+      try {
+        const kids = flattenChildren(m.issueChildren(i.id));
+        const done = kids.filter((k) => k.status === 'done').length;
+        progress = { total: kids.length, done };
+      } catch {
+        progress = null;
+      }
+      return {
+        id: i.id,
+        key: i.key,
+        title: i.title,
+        status: i.status,
+        createdAt: i.created_at || null,
+        progress,
+      };
+    }),
+  );
+  // 最新在前
+  tasks.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return tasks;
+}
+
+/** 任务详情：父任务 + 各子任务 + Agent 在线/工作状态 + 实时执行 */
+export function taskDetail(parentId) {
+  m.checkAvailable();
+  const parent = m.issueGet(parentId);
+  const kids = flattenChildren(m.issueChildren(parentId));
+
+  let agents = [];
+  let runtimes = [];
+  try { agents = m.agentList(); } catch { /* 兜底 */ }
+  try { runtimes = m.runtimeList(); } catch { /* 兜底 */ }
+  const agentById = new Map(agents.map((a) => [String(a.id), a]));
+  const rtById = new Map(runtimes.map((r) => [String(r.id), r]));
+
+  const children = kids.map((c) => {
+    const n = m.normalizeIssue(c);
+    const agentId = n.assigneeId || n.assignee_id || null;
+    const agent = agentId ? agentById.get(String(agentId)) : null;
+    const rt = agent?.runtime_id ? rtById.get(String(agent.runtime_id)) : null;
+    let task = null;
+    try {
+      const runs = m.issueRuns(n.id);
+      task = runs[0] || null;
+    } catch { /* 无执行记录 */ }
+    return {
+      key: n.key,
+      id: n.id,
+      title: n.title,
+      status: n.status,
+      agentId,
+      agentName: agent?.name || null,
+      agentOnline: !!agent?.runtime_bound && rt?.status === 'online',
+      agentRuntime: rt ? { name: rt.name, status: rt.status } : null,
+      task: task ? summarizeTask(task) : null,
+    };
+  });
+
+  const counts = { total: children.length, done: 0, inReview: 0, todo: 0, cancelled: 0, running: 0, failed: 0 };
+  for (const c of children) {
+    if (c.status === 'done') counts.done += 1;
+    else if (c.status === 'in_review') counts.inReview += 1;
+    else if (c.status === 'todo' || c.status === 'backlog') counts.todo += 1;
+    else if (c.status === 'cancelled') counts.cancelled += 1;
+    if (c.task && ACTIVE_TASK_STATUS.has(c.task.status)) counts.running += 1;
+    if (c.task?.status === 'failed') counts.failed += 1;
+  }
+
+  return {
+    parent: {
+      id: parent.id,
+      key: parent.key,
+      title: parent.title,
+      status: parent.status,
+      createdAt: parent.created_at || null,
+    },
+    children,
+    counts,
+    allDone: children.length > 0 && counts.done === children.length,
+  };
+}
+
+/** Agent 实时情况：基本信息 + runtime 在线 + 运行中/最近任务 */
+export function agentDetail(agentId) {
+  m.checkAvailable();
+  const agents = m.agentList();
+  const agent = agents.find((a) => String(a.id) === String(agentId));
+  if (!agent) {
+    const err = new Error(`找不到 Agent：${agentId}`);
+    err.status = 404;
+    throw err;
+  }
+  let runtimes = [];
+  try { runtimes = m.runtimeList(); } catch { /* 兜底 */ }
+  const rt = agent.runtime_id ? runtimes.find((r) => String(r.id) === String(agent.runtime_id)) : null;
+
+  let tasks = [];
+  try { tasks = m.agentTasks(agentId, { limit: 20 }); } catch { /* 无任务 */ }
+  const running = tasks.filter((t) => ACTIVE_TASK_STATUS.has(t.status));
+
+  return {
+    agent: normalizeAgentForMonitor(agent),
+    runtime: rt
+      ? { id: rt.id, name: rt.name, status: rt.status, lastSeen: rt.last_seen_at || rt.last_heartbeat_at || null }
+      : null,
+    online: !!agent.runtime_bound && rt?.status === 'online',
+    busy: running.length > 0,
+    runningTasks: running.map(summarizeTask),
+    recentTasks: tasks.slice(0, 10).map(summarizeTask),
+  };
+}
+
+/** 工作区全部 Agent 的存在状态（在线/离线 + 运行中标记） */
+export async function agentPresence() {
+  m.checkAvailable();
+  const agents = m.agentList();
+  let runtimes = [];
+  try { runtimes = m.runtimeList(); } catch { /* 兜底 */ }
+  const rtById = new Map(runtimes.map((r) => [String(r.id), r]));
+
+  const rows = agents.map((a) => {
+    const rt = a.runtime_id ? rtById.get(String(a.runtime_id)) : null;
+    const online = !!a.runtime_bound && rt?.status === 'online';
+    return {
+      ...normalizeAgentForMonitor(a),
+      online,
+      runtimeStatus: rt?.status || null,
+      runtimeName: rt?.name || null,
+      lastSeen: rt?.last_seen_at || rt?.last_heartbeat_at || null,
+    };
+  });
+
+  // 对在线 Agent 并行探测运行中任务（离线 Agent 不可能在跑，跳过）
+  const busyIds = new Set();
+  await Promise.all(
+    rows
+      .filter((r) => r.online)
+      .map(async (r) => {
+        try {
+          const tasks = m.agentTasks(r.id, { limit: 5 });
+          if (tasks.some((t) => ACTIVE_TASK_STATUS.has(t.status))) busyIds.add(String(r.id));
+        } catch { /* 忽略 */ }
+      }),
+  );
+  for (const r of rows) {
+    r.busy = busyIds.has(String(r.id));
+  }
+  return rows;
 }

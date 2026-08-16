@@ -209,14 +209,20 @@ export function issueGet(id) {
   return normalizeIssue(runJson(['issue', 'get', id]));
 }
 
-/** 列出 issue（可按状态/负责人过滤） */
+/** 列出 issue（可按状态/负责人过滤；metadata 形如 'fanout_task=true'） */
 export function issueList(opts = {}) {
   const args = ['issue', 'list', '--output', 'json'];
   if (opts.status) args.push('--status', opts.status);
   if (opts.assignee) args.push('--assignee', opts.assignee);
   if (opts.limit) args.push('--limit', String(opts.limit));
+  if (opts.metadata) args.push('--metadata', opts.metadata);
   const data = runJson(args);
   return asArray(data).map(normalizeIssue);
+}
+
+/** 设置 issue 级 metadata（value 会被 JSON 解析；如 'true' → bool） */
+export function issueMetadataSet(id, key, value) {
+  return runJson(['issue', 'metadata', 'set', id, '--key', key, '--value', String(value)]);
 }
 
 /** 列出子 issue（真实 CLI 需 --output json；返回 { stages, total, unstaged }） */
@@ -249,6 +255,30 @@ export function issueCommentAdd(id, { content, contentFile } = {}) {
 /** 修改状态 */
 export function issueStatus(id, status) {
   return runJson(['issue', 'status', id, status]);
+}
+
+// ------------------------------------------------------------
+// Agent / Runtime / Task（实时工作监控）
+// ------------------------------------------------------------
+
+/** 某个 agent 的 task 列表（含运行中/历史；最新在前） */
+export function agentTasks(agentId, { limit } = {}) {
+  const args = ['agent', 'tasks', agentId, '--output', 'json'];
+  if (limit) args.push('--limit', String(limit));
+  const data = runJson(args);
+  return asArray(data);
+}
+
+/** 某个 issue 的执行历史（task） */
+export function issueRuns(issueId) {
+  const data = runJson(['issue', 'runs', issueId, '--output', 'json']);
+  return asArray(data);
+}
+
+/** runtime 列表（online/offline 判定依据） */
+export function runtimeList() {
+  const data = runJson(['runtime', 'list', '--output', 'json']);
+  return asArray(data);
 }
 
 export { MulticaError };

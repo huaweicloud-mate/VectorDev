@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { resolveAgents } from '../src/dispatch.js';
 import { slugify, agentKey, buildSubtaskDescription, buildAggregateSummary } from '../src/templates.js';
 import { resolveRuntime } from '../src/config.js';
+import { configureRuntime } from '../src/config.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const FAKE = path.join(ROOT, 'test', 'fake-multica.mjs');
@@ -243,4 +244,56 @@ test('集成：aggregate 收集产出并回写父 Issue', () => {
   const parsed = JSON.parse(comments.stdout);
   assert.ok(parsed.some((c) => c.content.includes('多 Agent 并行产出聚合')));
   assert.ok(parsed.some((c) => c.content.includes('codex 视角产出')));
+});
+
+// ------------------------------------------------------------
+// 任务监控（listTasks / taskDetail / agentPresence / agentDetail）
+// ------------------------------------------------------------
+test('集成：任务监控 —— 派发后能在任务列表/详情/Agent 状态中看到', async () => {
+  // 1. 通过 CLI 派发一个任务（含 metadata 标记 fanout_task）
+  const r1 = runFanout([
+    'dispatch',
+    '--title', '监控测试',
+    '--description', '任务监控集成验证',
+    '--agents', 'codex,claude,gemini',
+    '--json',
+  ]);
+  assert.equal(r1.status, 0, r1.stderr + r1.stdout);
+  const report = JSON.parse(r1.stdout);
+  const parentId = report.parent.id;
+
+  // 2. 进程内直接调用业务函数（注入 fake）
+  process.env.MULTICA_BIN = `${process.execPath} ${FAKE}`;
+  process.env.FAKE_STATE_FILE = path.join(tmpDir, 'state.json');
+  configureRuntime({});
+
+  const { listTasks, taskDetail, agentDetail, agentPresence } = await import('../src/dispatch.js');
+
+  // 任务列表应包含刚派发的任务
+  const tasks = await listTasks();
+  assert.ok(tasks.some((t) => t.id === parentId), '任务列表应包含新派发的任务');
+  const t = tasks.find((x) => x.id === parentId);
+  assert.ok(t.key, '任务应有 identifier 编号');
+
+  // 任务详情：3 个子任务 + agent 名解析
+  const d = taskDetail(parentId);
+  assert.equal(d.counts.total, 3);
+  assert.equal(d.children.length, 3);
+  assert.ok(d.children.every((c) => c.agentName));
+  assert.ok(d.parent.key);
+  // fake 为子 issue 生成了模拟执行记录
+  assert.ok(d.children.every((c) => c.task && c.task.status === 'completed'), '子任务应有执行记录');
+
+  // Agent 存在状态：在线/离线区分 + 名字
+  const presence = await agentPresence();
+  assert.ok(presence.length >= 6);
+  assert.ok(presence.some((p) => p.online), '应有在线 Agent');
+  assert.ok(presence.some((p) => !p.online), '应有离线 Agent');
+  const online = presence.find((p) => p.online);
+  assert.ok(online.id && online.name);
+
+  // Agent 详情
+  const ad = agentDetail(online.id);
+  assert.equal(ad.agent.id, online.id);
+  assert.ok(Array.isArray(ad.recentTasks));
 });
