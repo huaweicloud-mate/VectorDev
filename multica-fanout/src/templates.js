@@ -141,3 +141,36 @@ export function buildAggregateSummary({ title, items }) {
   lines.push('> 本汇总由 multica-fanout 自动生成，各子 Issue 中保留了每份产出的原始记录。', '');
   return lines.join('\n');
 }
+
+/**
+ * 构建汇总 Agent 的子任务描述（总-分-总模板的第二个「总」）
+ * 汇总 Agent 负责读取各并行子任务的产出，生成一份完整测试报告。
+ */
+export function buildSummaryDescription({ title, workers = [], background }) {
+  return [
+    `# [汇总] ${title} 完整测试报告`,
+    '',
+    '你是本任务的**汇总 Agent**。',
+    '',
+    '## 你的职责',
+    '',
+    '1. 读取父 Issue 下所有并行子任务（worker）的产出：子 Issue 的评论与附件即为各 Agent 的独立测试结果；',
+    '2. 汇总成一份**完整测试报告**（Markdown），结构如下：',
+    '',
+    '   - `## 测试概述`：目标、范围、参与方',
+    `   - \`## 各模块结果\`：${workers.length ? `覆盖 ${workers.join('、')} 的产出` : '逐一列出各子任务结论'}`,
+    '   - `## 问题清单`：汇总所有风险、缺陷、待确认项',
+    '   - `## 综合结论与建议`：整体判断与下一步',
+    '',
+    '## 产出要求',
+    '',
+    '1. 工作目录隔离：产出写入你自己的独立目录，不要覆盖其他 Agent 的文件；',
+    '2. 把完整报告内容**粘贴到本 Issue 评论**；',
+    '3. 完成后把本 Issue 状态置为 `in_review`。',
+    '',
+    '## 背景',
+    '',
+    background ? background : '（请阅读父 Issue 获取完整背景）',
+    '',
+  ].join('\n');
+}

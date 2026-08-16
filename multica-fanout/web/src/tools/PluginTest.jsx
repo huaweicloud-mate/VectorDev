@@ -37,6 +37,8 @@ export default function PluginTest() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [formError, setFormError] = useState(null);
+  const [mode, setMode] = useState('free'); // free | summary（总-分-总模板）
+  const [summaryAgent, setSummaryAgent] = useState('');
 
   const [dispatching, setDispatching] = useState(false);
   const [report, setReport] = useState(null);
@@ -83,15 +85,26 @@ export default function PluginTest() {
     setDispatchError(null);
     if (!title.trim()) return setFormError('请填写任务标题');
     if (selected.length === 0) return setFormError('请至少选择一个 Agent');
+    if (mode === 'summary' && !summaryAgent) return setFormError('请选择汇总 Agent');
     setDispatching(true);
     setReport(null);
     setRows(null);
     try {
-      const rep = await runTool('plugin-test', 'dispatch', {
-        title: title.trim(),
-        description: description.trim(),
-        agents: available.filter((a) => selected.includes(a.id)).map((a) => a.name),
-      });
+      const agentNames = available.filter((a) => selected.includes(a.id)).map((a) => a.name);
+      const rep =
+        mode === 'summary'
+          ? await runTool('plugin-test', 'dispatch-summary', {
+              template: 'summary',
+              title: title.trim(),
+              description: description.trim(),
+              agents: agentNames,
+              summaryAgent,
+            })
+          : await runTool('plugin-test', 'dispatch', {
+              title: title.trim(),
+              description: description.trim(),
+              agents: agentNames,
+            });
       setReport(rep);
       setSelected([]);
     } catch (e) {
@@ -147,6 +160,37 @@ export default function PluginTest() {
           多 Agent 并行分发：一个任务同时派发给多个 Agent，各自从独立视角执行。派发后到「任务监控」查看整体进展图。
         </p>
       </header>
+
+      {/* 派发模式 / 模板选择 */}
+      <section className="mb-5 grid gap-3 md:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => setMode('free')}
+          className={`rounded-2xl border p-4 text-left transition-all ${
+            mode === 'free' ? 'border-[#d97757]/50 bg-[#d97757]/5 ring-1 ring-[#d97757]/25' : 'border-slate-200 bg-white hover:border-slate-300'
+          }`}
+        >
+          <div className="text-sm font-semibold text-slate-800">自由派发</div>
+          <div className="mt-1 text-xs leading-relaxed text-slate-500">
+            一个任务派给 N 个 Agent 并行执行，之后手动聚合结果。
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode('summary')}
+          className={`rounded-2xl border p-4 text-left transition-all ${
+            mode === 'summary' ? 'border-[#d97757]/50 bg-[#d97757]/5 ring-1 ring-[#d97757]/25' : 'border-slate-200 bg-white hover:border-slate-300'
+          }`}
+        >
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            总-分-总 模板
+            <Badge tone="accent">模板</Badge>
+          </div>
+          <div className="mt-1 text-xs leading-relaxed text-slate-500">
+            起点 → N 个并行 Agent → 汇总 Agent 自动生成完整测试报告。
+          </div>
+        </button>
+      </section>
 
       {/* Agent 选择（紧凑表格） */}
       <section className="rounded-2xl border border-slate-200/60 bg-white shadow-sm">
@@ -271,9 +315,26 @@ export default function PluginTest() {
               placeholder="任务背景、目标与验收期望…"
             />
           </Field>
+          <div className={mode === 'summary' ? 'md:col-span-3' : ''}>
+            {mode === 'summary' && (
+              <Field label="汇总 Agent（第二个总）" hint="并行全部完成后启动" error={formError === '请选择汇总 Agent' ? formError : null}>
+                <select className={inputCls} value={summaryAgent} onChange={(e) => setSummaryAgent(e.target.value)}>
+                  <option value="">请选择汇总 Agent…</option>
+                  {available
+                    .filter((a) => a.online)
+                    .map((a) => (
+                      <option key={a.id} value={a.name}>
+                        {a.name}
+                        {a.model ? ` · ${a.model}` : ''}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            )}
+          </div>
           <div>
             <Button loading={dispatching} disabled={!agents} onClick={handleDispatch} className="w-full md:w-auto">
-              {dispatching ? '派发中…' : '一键并行派发'}
+              {dispatching ? '派发中…' : mode === 'summary' ? '按模板派发' : '一键并行派发'}
             </Button>
           </div>
         </div>

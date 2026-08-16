@@ -11,7 +11,8 @@
  *   POST aggregate/:id   → 聚合产出
  */
 import * as m from '../../src/multica.js';
-import { dispatch, status, aggregate, agentPresence } from '../../src/dispatch.js';
+import { dispatch, status, aggregate, agentPresence, dispatchSummarizeTemplate } from '../../src/dispatch.js';
+import { listTemplates, getTemplate } from '../templates.mjs';
 import { registerTool } from '../gateway.mjs';
 
 registerTool({
@@ -23,6 +24,32 @@ registerTool({
       method: 'GET',
       // 带存在状态：在线/离线/工作中（runtime 在线 + 运行中任务探测）
       run: () => agentPresence(),
+    },
+    templates: {
+      method: 'GET',
+      run: () => listTemplates(),
+    },
+    'dispatch-summary': {
+      method: 'POST',
+      run: ({ body }) => {
+        const tpl = getTemplate(body.template || 'summary');
+        if (!tpl) throw Object.assign(new Error(`未知模板：${body.template}`), { status: 400 });
+        if (tpl.id !== 'summary') {
+          throw Object.assign(new Error(`模板 ${tpl.id} 暂不支持执行`), { status: 400 });
+        }
+        if (!body.title) throw Object.assign(new Error('缺少 title'), { status: 400 });
+        if (!Array.isArray(body.agents) || !body.agents.length) {
+          throw Object.assign(new Error('缺少 agents（至少 1 个并行 Agent）'), { status: 400 });
+        }
+        if (!body.summaryAgent) throw Object.assign(new Error('请选择汇总 Agent'), { status: 400 });
+        return dispatchSummarizeTemplate({
+          title: body.title,
+          description: body.description || '',
+          agents: body.agents,
+          summaryAgent: body.summaryAgent,
+          status: body.status || 'todo',
+        });
+      },
     },
     dispatch: {
       method: 'POST',

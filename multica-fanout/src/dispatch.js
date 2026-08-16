@@ -7,6 +7,7 @@ import {
   buildParentDescription,
   buildSubtaskDescription,
   buildAggregateSummary,
+  buildSummaryDescription,
 } from './templates.js';
 
 /**
@@ -371,61 +372,64 @@ const ACTIVE_TASK_STATUS = new Set(['dispatched', 'claimed', 'running']);
 /** 任务列表：metadata 标记的 fanout 父任务（并行拉取各任务进度） */
 export async function listTasks() {
   m.checkAvailable();
-  const issues = m.issueList({ metadata: 'fanout_task=true' });
+  const issues = await m.issueListAsync({ metadata: 'fanout_task=true' });
   // 并行计算每个任务的子任务进度
-  const tasks = await Promise.all(
-    issues.map(async (i) => {
-      let progress = null;
-      try {
-        const kids = flattenChildren(m.issueChildren(i.id));
-        const done = kids.filter((k) => k.status === 'done').length;
-        progress = { total: kids.length, done };
-      } catch {
-        progress = null;
-      }
-      return {
-        id: i.id,
-        key: i.key,
-        title: i.title,
-        status: i.status,
-        createdAt: i.created_at || null,
-        progress,
-      };
-    }),
+  const progresses = await Promise.all(
+    issues.map((i) =>
+      m
+        .issueChildrenAsync(i.id)
+        .then((raw) => {
+          const kids = flattenChildren(raw);
+          const done = kids.filter((k) => k.status === 'done').length;
+          return { total: kids.length, done };
+        })
+        .catch(() => null),
+    ),
   );
+  const tasks = issues.map((i, idx2) => ({
+    id: i.id,
+    key: i.key,
+    title: i.title,
+    status: i.status,
+    createdAt: i.created_at || null,
+    progress: progresses[idx2],
+  }));
   // 最新在前
   tasks.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   return tasks;
 }
 
-/** 任务详情：父任务 + 各子任务 + Agent 在线/工作状态 + 实时执行 */
-export function taskDetail(parentId) {
+/** 任务详情：父任务 + 各子任务 + Agent 在线/工作状态 + 实时执行（并行查询） */
+export async function taskDetail(parentId) {
   m.checkAvailable();
-  const parent = m.issueGet(parentId);
-  const kids = flattenChildren(m.issueChildren(parentId));
+  const [parent, raw, agents, runtimes] = await Promise.all([
+    m.issueGetAsync(parentId),
+    m.issueChildrenAsync(parentId),
+    m.agentListAsync(),
+    m.runtimeListAsync(),
+  ]);
+  const kids = flattenChildren(raw);
 
-  let agents = [];
-  let runtimes = [];
-  try { agents = m.agentList(); } catch { /* 兜底 */ }
-  try { runtimes = m.runtimeList(); } catch { /* 兜底 */ }
   const agentById = new Map(agents.map((a) => [String(a.id), a]));
   const rtById = new Map(runtimes.map((r) => [String(r.id), r]));
 
-  const children = kids.map((c) => {
+  // 并行拉取每个子任务的最新执行记录
+  const runsList = await Promise.all(
+    kids.map((k) => m.issueRunsAsync(k.id).catch(() => [])),
+  );
+
+  const children = kids.map((c, idx2) => {
     const n = m.normalizeIssue(c);
     const agentId = n.assigneeId || n.assignee_id || null;
     const agent = agentId ? agentById.get(String(agentId)) : null;
     const rt = agent?.runtime_id ? rtById.get(String(agent.runtime_id)) : null;
-    let task = null;
-    try {
-      const runs = m.issueRuns(n.id);
-      task = runs[0] || null;
-    } catch { /* 无执行记录 */ }
+    const task = (runsList[idx2] || [])[0] || null;
     return {
       key: n.key,
       id: n.id,
       title: n.title,
       status: n.status,
+      role: n.metadata?.role || null,
       agentId,
       agentName: agent?.name || null,
       agentOnline: !!agent?.runtime_bound && rt?.status === 'online',
@@ -451,6 +455,7 @@ export function taskDetail(parentId) {
       title: parent.title,
       status: parent.status,
       createdAt: parent.created_at || null,
+      template: parent.metadata?.template || null,
     },
     children,
     counts,
@@ -459,21 +464,19 @@ export function taskDetail(parentId) {
 }
 
 /** Agent 实时情况：基本信息 + runtime 在线 + 运行中/最近任务 */
-export function agentDetail(agentId) {
+export async function agentDetail(agentId) {
   m.checkAvailable();
-  const agents = m.agentList();
+  const [agents, runtimes] = await Promise.all([m.agentListAsync(), m.runtimeListAsync()]);
   const agent = agents.find((a) => String(a.id) === String(agentId));
   if (!agent) {
     const err = new Error(`找不到 Agent：${agentId}`);
     err.status = 404;
     throw err;
   }
-  let runtimes = [];
-  try { runtimes = m.runtimeList(); } catch { /* 兜底 */ }
   const rt = agent.runtime_id ? runtimes.find((r) => String(r.id) === String(agent.runtime_id)) : null;
 
   let tasks = [];
-  try { tasks = m.agentTasks(agentId, { limit: 20 }); } catch { /* 无任务 */ }
+  try { tasks = await m.agentTasksAsync(agentId, { limit: 20 }); } catch { /* 无任务 */ }
   const running = tasks.filter((t) => ACTIVE_TASK_STATUS.has(t.status));
 
   return {
@@ -488,12 +491,10 @@ export function agentDetail(agentId) {
   };
 }
 
-/** 工作区全部 Agent 的存在状态（在线/离线 + 运行中标记） */
+/** 工作区全部 Agent 的存在状态（在线/离线 + 运行中标记，并行探测） */
 export async function agentPresence() {
   m.checkAvailable();
-  const agents = m.agentList();
-  let runtimes = [];
-  try { runtimes = m.runtimeList(); } catch { /* 兜底 */ }
+  const [agents, runtimes] = await Promise.all([m.agentListAsync(), m.runtimeListAsync()]);
   const rtById = new Map(runtimes.map((r) => [String(r.id), r]));
 
   const rows = agents.map((a) => {
@@ -509,19 +510,176 @@ export async function agentPresence() {
   });
 
   // 对在线 Agent 并行探测运行中任务（离线 Agent 不可能在跑，跳过）
-  const busyIds = new Set();
-  await Promise.all(
-    rows
-      .filter((r) => r.online)
-      .map(async (r) => {
+  // busy 结果缓存 8s：前端 6s 轮询，8s 内足够新，避免每次全量查询
+  const onlineRows = rows.filter((r) => r.online);
+  const busyResults = await Promise.all(
+    onlineRows.map((r) =>
+      m.cachedCall(`busy:${r.id}`, 8000, async () => {
         try {
-          const tasks = m.agentTasks(r.id, { limit: 5 });
-          if (tasks.some((t) => ACTIVE_TASK_STATUS.has(t.status))) busyIds.add(String(r.id));
-        } catch { /* 忽略 */ }
-      }),
+          const tasks = await m.agentTasksAsync(r.id, { limit: 5 });
+          return tasks.some((t) => ACTIVE_TASK_STATUS.has(t.status));
+        } catch {
+          return false;
+        }
+      }).then((busy) => [String(r.id), busy]),
+    ),
   );
-  for (const r of rows) {
-    r.busy = busyIds.has(String(r.id));
-  }
+  const busyMap = new Map(busyResults);
+  for (const r of rows) r.busy = busyMap.get(String(r.id)) || false;
   return rows;
+}
+
+// ============================================================
+// 审核与结果查看（课题 2：不离开本页面完成审核）
+// ============================================================
+
+function summarizeTaskFull(t) {
+  return {
+    ...summarizeTask(t),
+    result: t.result || null,
+    resultOutput: t.result?.output || null,
+  };
+}
+
+/** 查看单个子任务的完整结果：执行记录（完整 output）+ 评论 */
+export async function reviewIssue(issueId) {
+  m.checkAvailable();
+  const [runs, comments] = await Promise.all([
+    m.issueRunsAsync(issueId).catch(() => []),
+    m.issueCommentListAsync(issueId).catch(() => []),
+  ]);
+  const issue = await m.issueGetAsync(issueId).catch(() => null);
+  return {
+    issue: issue
+      ? { id: issue.id, key: issue.key, title: issue.title, status: issue.status }
+      : { id: issueId },
+    runs: runs.map(summarizeTaskFull),
+    comments,
+  };
+}
+
+/** 审核通过：子任务 → done + 评论留痕 */
+export async function approveIssue(issueId, { comment = '' } = {}) {
+  m.checkAvailable();
+  await m.issueStatusAsync(issueId, 'done');
+  const note = comment.trim() ? `审核意见：${comment.trim()}` : '';
+  await m.issueCommentAddAsync(issueId, {
+    content: ['审核通过', note ? `- ${note}` : '', '', '_由 VectorDev 控制台审核_'].filter(Boolean).join('\n'),
+  });
+  return { issueId, status: 'done' };
+}
+
+/** 驳回：子任务回退 todo + 评论留痕 */
+export async function rejectIssue(issueId, { comment = '需要修改' } = {}) {
+  m.checkAvailable();
+  await m.issueStatusAsync(issueId, 'todo');
+  await m.issueCommentAddAsync(issueId, {
+    content: ['驳回：请修改后重新提交', `- ${comment.trim() || '需要修改'}`, '', '_由 VectorDev 控制台驳回_'].join('\n'),
+  });
+  return { issueId, status: 'todo' };
+}
+
+// ============================================================
+// 模板执行（课题 3）：总-分-总
+// ============================================================
+
+/**
+ * 按「总-分-总」模板派发：
+ *  - 父 issue（起点，无 Agent）
+ *  - N 个并行 worker 子 issue（分，立即 todo 执行）
+ *  - 1 个汇总子 issue（第二个总，backlog 占位，等 worker 全 done 后由 startSummary 激活）
+ */
+export async function dispatchSummarizeTemplate({ title, description, agents, summaryAgent, status = 'todo', priority, project }) {
+  m.checkAvailable();
+  const allAgents = m.agentList();
+  const workers = resolveAgents(agents, allAgents);
+  if (!workers.length) throw new Error('请至少选择一个并行 Agent');
+  const summary = resolveAgents([summaryAgent], allAgents)[0];
+  if (!summary) throw new Error('请选择汇总 Agent');
+
+  const parentDesc = buildParentDescription({ title, background: description, agentCount: workers.length });
+  const parent = m.issueCreate({
+    title: `[总分总] ${title}`,
+    description: parentDesc,
+    status,
+    priority,
+    project,
+  });
+  const parentId = parent.id || parent.key;
+  try { await m.issueMetadataSetAsync(parentId, 'fanout_task', 'true'); } catch { /* 忽略 */ }
+  try { await m.issueMetadataSetAsync(parentId, 'template', 'summary'); } catch { /* 忽略 */ }
+
+  // 分：并行 worker
+  const workerChildren = [];
+  for (let i = 0; i < workers.length; i++) {
+    const agent = workers[i];
+    const childDesc = buildSubtaskDescription({
+      title,
+      background: description,
+      viewpoint: `第 ${i + 1} 个专业视角：从独立角度执行并输出测试结果`,
+      agentName: agent.name,
+      index: i + 1,
+      outputSpec: { dir: 'output', filePrefix: 'view' },
+    });
+    const child = m.issueCreate({
+      title: `[${i + 1}/${workers.length}] ${title}（${agent.name}）`,
+      description: childDesc,
+      status,
+      assignee: agent.name,
+      parent: parentId,
+      priority,
+      project,
+    });
+    const childId = child.id || child.key;
+    try { await m.issueMetadataSetAsync(childId, 'role', 'worker'); } catch { /* 忽略 */ }
+    workerChildren.push({
+      index: i + 1,
+      agentName: agent.name,
+      agentId: agent.id || null,
+      issueId: childId,
+      issueKey: child.key || null,
+    });
+    console.error(`  ✓ 已派发并行 ${i + 1}/${workers.length}：${agent.name} → ${child.key || child.id}`);
+  }
+
+  // 总：汇总子 issue（backlog 占位）
+  const summaryDesc = buildSummaryDescription({ title, workers: workers.map((w) => w.name), background: description });
+  const summ = m.issueCreate({
+    title: `[汇总] ${title} 完整测试报告（${summary.name}）`,
+    description: summaryDesc,
+    status: 'backlog',
+    assignee: summary.name,
+    parent: parentId,
+    priority,
+    project,
+  });
+  const summId = summ.id || summ.key;
+  try { await m.issueMetadataSetAsync(summId, 'role', 'summarizer'); } catch { /* 忽略 */ }
+  console.error(`  ✓ 汇总节点已就位（backlog，待并行完成后激活）：${summary.name} → ${summ.key || summ.id}`);
+
+  return {
+    parent: { id: parentId, key: parent.key || null, title: `[总分总] ${title}`, template: 'summary' },
+    workerCount: workerChildren.length,
+    workers: workerChildren,
+    summarizer: { agentName: summary.name, agentId: summary.id, issueId: summId, issueKey: summ.key || null, status: 'backlog' },
+    note: '并行子任务完成（done）后，可在任务监控页点击「启动汇总」激活汇总 Agent。',
+  };
+}
+
+/** 激活汇总：把汇总子 issue 从 backlog → todo（触发汇总 Agent 执行） */
+export async function startSummary(parentId) {
+  m.checkAvailable();
+  const raw = await m.issueChildrenAsync(parentId);
+  const kids = flattenChildren(raw);
+  const summ = kids.find((k) => k.metadata?.role === 'summarizer');
+  if (!summ) {
+    const err = new Error('该任务没有汇总节点（非总-分-总模板）');
+    err.status = 400;
+    throw err;
+  }
+  if (summ.status !== 'backlog') {
+    throw Object.assign(new Error(`汇总节点当前状态为 ${summ.status}，无需重复启动`), { status: 400 });
+  }
+  await m.issueStatusAsync(summ.id, 'todo');
+  return { issueId: summ.id, issueKey: summ.key || summ.identifier || null, status: 'todo', agentName: summ.assignee || null };
 }

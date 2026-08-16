@@ -275,8 +275,8 @@ test('集成：任务监控 —— 派发后能在任务列表/详情/Agent 状�
   const t = tasks.find((x) => x.id === parentId);
   assert.ok(t.key, '任务应有 identifier 编号');
 
-  // 任务详情：3 个子任务 + agent 名解析
-  const d = taskDetail(parentId);
+  // 任务详情：3 个子任务 + agent 名解析（async，需 await）
+  const d = await taskDetail(parentId);
   assert.equal(d.counts.total, 3);
   assert.equal(d.children.length, 3);
   assert.ok(d.children.every((c) => c.agentName));
@@ -292,8 +292,8 @@ test('集成：任务监控 —— 派发后能在任务列表/详情/Agent 状�
   const online = presence.find((p) => p.online);
   assert.ok(online.id && online.name);
 
-  // Agent 详情
-  const ad = agentDetail(online.id);
+  // Agent 详情（async，需 await）
+  const ad = await agentDetail(online.id);
   assert.equal(ad.agent.id, online.id);
   assert.ok(Array.isArray(ad.recentTasks));
 });

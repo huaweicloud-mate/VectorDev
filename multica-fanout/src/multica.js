@@ -1,10 +1,14 @@
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { getRuntime, globalFlags } from './config.js';
 
 /**
  * Multica CLI 封装层
  * 通过 spawn 调用本机已安装的 `multica` 命令，统一 JSON 解析与错误处理。
- * 所有函数均为同步（CLI 场景，简单可靠）。
+ *
+ * 提供两套 API：
+ *  - 同步（run / runJson / agentList ...）：CLI 工具用，简单可靠；
+ *  - 异步（runAsync / runJsonAsync / agentListAsync ...）：HTTP 服务用，
+ *    配合 Promise.all 并行，避免串行阻塞导致页面卡顿。
  *
  * 连接配置（profile/workspace/server-url）由 src/config.js 注入，
  * 会附加到每条 multica 命令的全局 flag 上。
@@ -61,6 +65,143 @@ export function run(args, { input } = {}) {
     );
   }
   return (res.stdout || '').trim();
+}
+
+// ------------------------------------------------------------
+// 异步版本（HTTP 服务用）：配合 Promise.all 并行，避免串行阻塞
+// ------------------------------------------------------------
+
+/** 异步执行 multica 命令 */
+export function runAsync(args, { input } = {}) {
+  return new Promise((resolve, reject) => {
+    const { cmd, argv } = resolveInvocation(args);
+    const child = spawn(cmd, argv, {
+      encoding: 'utf8',
+      windowsHide: true,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('error', (err) =>
+      reject(new MulticaError(`无法执行 ${cmd}：${err.message}`, { cmd: args.join(' ') })),
+    );
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(
+          new MulticaError(
+            `命令失败 (${code})：multica ${args.join(' ')}\n${(stderr || stdout).trim()}`,
+            { cmd: args.join(' '), code, stderr },
+          ),
+        );
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+    if (input != null) child.stdin.end(input);
+    else child.stdin.end();
+  });
+}
+
+/** 异步执行并解析 JSON */
+export async function runJsonAsync(args) {
+  const stdout = await runAsync(args);
+  if (!stdout) return null;
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new MulticaError(`输出不是合法 JSON：multica ${args.join(' ')}\n${stdout.slice(0, 500)}`);
+  }
+}
+
+// 简单 TTL 缓存：低频变化的只读数据（agent/runtime 列表）
+const cacheStore = new Map();
+export function cachedCall(key, ttlMs, loader) {
+  const hit = cacheStore.get(key);
+  const now = Date.now();
+  if (hit && hit.expires > now) return Promise.resolve(hit.value);
+  return loader().then((v) => {
+    cacheStore.set(key, { value: v, expires: now + ttlMs });
+    return v;
+  });
+}
+export function clearCache() {
+  cacheStore.clear();
+}
+
+/** 异步：列出智能体（缓存 30s） */
+export async function agentListAsync() {
+  return cachedCall('agentList', 30000, () =>
+    runJsonAsync(['agent', 'list', '--output', 'json']).then(asArray),
+  );
+}
+
+/** 异步：runtime 列表（缓存 30s） */
+export async function runtimeListAsync() {
+  return cachedCall('runtimeList', 30000, () =>
+    runJsonAsync(['runtime', 'list', '--output', 'json']).then(asArray),
+  );
+}
+
+/** 异步：某个 agent 的 task 列表（实时，不缓存） */
+export async function agentTasksAsync(agentId, { limit } = {}) {
+  const args = ['agent', 'tasks', agentId, '--output', 'json'];
+  if (limit) args.push('--limit', String(limit));
+  return runJsonAsync(args).then(asArray);
+}
+
+/** 异步：某个 issue 的执行历史（实时） */
+export async function issueRunsAsync(issueId) {
+  return runJsonAsync(['issue', 'runs', issueId, '--output', 'json']).then(asArray);
+}
+
+/** 异步：issue children */
+export async function issueChildrenAsync(id) {
+  return runJsonAsync(['issue', 'children', id, '--output', 'json']);
+}
+
+/** 异步：issue get */
+export async function issueGetAsync(id) {
+  return runJsonAsync(['issue', 'get', id]).then(normalizeIssue);
+}
+
+/** 异步：issue list（支持 metadata 过滤） */
+export async function issueListAsync(opts = {}) {
+  const args = ['issue', 'list', '--output', 'json'];
+  if (opts.status) args.push('--status', opts.status);
+  if (opts.assignee) args.push('--assignee', opts.assignee);
+  if (opts.limit) args.push('--limit', String(opts.limit));
+  if (opts.metadata) args.push('--metadata', opts.metadata);
+  return runJsonAsync(args).then((d) => asArray(d).map(normalizeIssue));
+}
+
+/** 异步：issue 评论列表 */
+export async function issueCommentListAsync(id, opts = {}) {
+  const args = ['issue', 'comment', 'list', id, '--output', 'json'];
+  if (opts.tail) args.push('--tail', String(opts.tail));
+  return runJsonAsync(args).then(asArray);
+}
+
+/** 异步：添加评论（长内容走 stdin） */
+export async function issueCommentAddAsync(id, { content } = {}) {
+  if (content == null) throw new MulticaError('issueCommentAddAsync 需要 content');
+  const stdout = await runAsync(['issue', 'comment', 'add', id, '--content-stdin'], { input: content });
+  try {
+    return stdout ? JSON.parse(stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 异步：修改 issue 状态 */
+export async function issueStatusAsync(id, status) {
+  return runJsonAsync(['issue', 'status', id, status]);
+}
+
+/** 异步：设置 metadata */
+export async function issueMetadataSetAsync(id, key, value) {
+  return runJsonAsync(['issue', 'metadata', 'set', id, '--key', key, '--value', String(value)]);
 }
 
 /** 执行命令并解析 JSON 输出 */
