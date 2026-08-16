@@ -96,15 +96,21 @@ export default function TaskView() {
     return () => clearInterval(timer);
   }, [activeId, refreshDetail]);
 
-  const openAgent = async (agentId) => {
+  const openAgent = async (agentId, context = null) => {
     if (!agentId) return;
-    setAgentDrawer({ id: agentId });
+    // context: 当前任务中的子任务 { issueId, issueKey, agentName, status }
+    setAgentDrawer({ id: agentId, context });
     setAgentLoading(true);
     try {
-      const d = await runToolWithPath('task-monitor', 'agent', agentId);
-      setAgentDrawer({ id: agentId, data: d });
+      const [d, rv] = await Promise.all([
+        runToolWithPath('task-monitor', 'agent', agentId),
+        context?.issueId
+          ? runToolWithPath('task-monitor', 'review', context.issueId).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      setAgentDrawer({ id: agentId, context, data: d, review: rv });
     } catch (e) {
-      setAgentDrawer({ id: agentId, error: e.message });
+      setAgentDrawer({ id: agentId, context, error: e.message });
     } finally {
       setAgentLoading(false);
     }
@@ -387,7 +393,7 @@ export default function TaskView() {
                 const busy = c.task && ['running', 'claimed', 'dispatched'].includes(c.task.status);
                 const tone = c.status === 'done' ? 'agentDone' : busy ? 'agentBusy' : 'agent';
                 return (
-                  <NodeBox key={c.id} x={layout.summarizer ? 46 : 51} y={y} width={16} tone={tone} onClick={() => openAgent(c.agentId)}>
+                  <NodeBox key={c.id} x={layout.summarizer ? 46 : 51} y={y} width={16} tone={tone} onClick={() => openAgent(c.agentId, { issueId: c.id, issueKey: c.key, agentName: c.agentName, status: c.status })}>
                     <div className="flex items-center gap-1.5">
                       <StatusDot tone={busy ? 'accent' : c.status === 'done' ? 'ok' : c.agentOnline ? 'ok' : 'muted'} />
                       <span className="truncate text-xs font-medium text-slate-800">{c.agentName || '未分配'}</span>
@@ -440,7 +446,7 @@ export default function TaskView() {
 
               {/* 汇总节点（第二个总） */}
               {layout.summarizer && (
-                <NodeBox x={69} y={50} width={15} tone="summary" onClick={() => openAgent(layout.summarizer.agentId)}>
+                <NodeBox x={69} y={50} width={15} tone="summary" onClick={() => openAgent(layout.summarizer.agentId, { issueId: layout.summarizer.id, issueKey: layout.summarizer.key, agentName: layout.summarizer.agentName, status: layout.summarizer.status })}>
                   <div className="flex items-center gap-1.5">
                     <StatusDot
                       tone={
@@ -533,7 +539,16 @@ export default function TaskView() {
                 </div>
               )}
               {agentDrawer.error && <ErrorState message={agentDrawer.error} />}
-              {agentDrawer.data && <AgentDetailPanel data={agentDrawer.data} />}
+              {agentDrawer.data && (
+                <AgentDetailPanel
+                  data={agentDrawer.data}
+                  context={agentDrawer.context}
+                  review={agentDrawer.review}
+                  acting={acting}
+                  onApprove={(ctx) => doApprove({ id: ctx.issueId, agentName: ctx.agentName })}
+                  onReject={(ctx) => doReject({ id: ctx.issueId, agentName: ctx.agentName })}
+                />
+              )}
             </div>
           </aside>
         </div>
@@ -542,9 +557,9 @@ export default function TaskView() {
   );
 }
 
-function AgentDetailPanel({ data }) {
+function AgentDetailPanel({ data, context, review, acting, onApprove, onReject }) {
   const { agent, runtime, online, busy, runningTasks, recentTasks } = data;
-  const [review, setReview] = useState(null); // { taskId, data }
+  const [review2, setReview] = useState({}); // 最近任务里展开的完整结果 { taskId, data }
   const [reviewLoading, setReviewLoading] = useState(null);
 
   const loadReview = async (issueId) => {
@@ -577,6 +592,17 @@ function AgentDetailPanel({ data }) {
         </dl>
       </div>
 
+      {/* 当前任务中的执行情况（点击节点时上下文） */}
+      {context && (
+        <InTaskExecution
+          context={context}
+          review={review}
+          acting={acting}
+          onApprove={onApprove}
+          onReject={onReject}
+        />
+      )}
+
       <section>
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
           运行中 {runningTasks.length > 0 && <span className="text-[#d97757]">({runningTasks.length})</span>}
@@ -606,7 +632,7 @@ function AgentDetailPanel({ data }) {
         ) : (
           <ul className="divide-y divide-slate-100 rounded-xl border border-slate-100">
             {recentTasks.map((t) => {
-              const rv = review?.[t.issueId];
+              const rv = review2?.[t.issueId];
               return (
                 <li key={t.id} className="px-3 py-2.5">
                   <div className="flex items-center justify-between gap-2">
@@ -637,6 +663,90 @@ function AgentDetailPanel({ data }) {
         )}
       </section>
     </div>
+  );
+}
+
+/** 当前任务中的执行情况：子 Issue 状态 + 执行记录 + 完整产出 + 审核 */
+function InTaskExecution({ context, review, acting, onApprove, onReject }) {
+  const runs = review?.runs || [];
+  const issue = review?.issue || null;
+  return (
+    <section className="rounded-xl border border-[#d97757]/20 bg-[#d97757]/[0.03] p-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">当前任务中的执行</h3>
+        <Badge tone={ISSUE_TONE[context.status] || 'neutral'}>{context.status}</Badge>
+      </div>
+      <div className="mt-1 text-[11px] text-slate-400">
+        {context.issueKey} · {context.agentName}
+      </div>
+
+      {!review ? (
+        <p className="mt-3 text-xs text-slate-400">加载执行记录…</p>
+      ) : runs.length === 0 ? (
+        <p className="mt-3 rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
+          该子任务尚无执行记录（可能未开始或已排队）
+        </p>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {runs.map((r) => (
+            <li key={r.id} className="rounded-lg bg-white p-3 ring-1 ring-slate-100">
+              <div className="flex items-center justify-between gap-2">
+                <Badge tone={TASK_TONE[r.status] || 'neutral'}>
+                  {r.status}
+                  {r.attempt > 1 ? ` · 第${r.attempt}次` : ''}
+                </Badge>
+                <span className="text-[10px] text-slate-400">
+                  {r.completedAt ? `完成 ${fmtTime(r.completedAt)}` : r.startedAt ? `开始 ${fmtTime(r.startedAt)}` : fmtTime(r.createdAt)}
+                </span>
+              </div>
+              {r.error && <div className="mt-2 break-all text-[11px] text-rose-600">{String(r.error).slice(0, 200)}</div>}
+              {r.resultOutput ? (
+                <pre className="mt-2 max-h-52 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-700">
+                  {r.resultOutput}
+                </pre>
+              ) : (
+                r.resultPreview && (
+                  <div className="mt-2 whitespace-pre-line text-[11px] text-slate-500">{r.resultPreview}</div>
+                )
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* 评论（Agent 回贴的产出） */}
+      {review?.comments?.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {review.comments.map((c, i) => (
+            <div key={c.id || i} className="rounded-md bg-white px-2.5 py-2 text-[11px] text-slate-600 ring-1 ring-slate-100">
+              {String(c.content || '').slice(0, 600)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 审核操作（in_review 时） */}
+      {context.status === 'in_review' && (
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            disabled={acting}
+            onClick={() => onApprove(context)}
+            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            审核通过
+          </button>
+          <button
+            type="button"
+            disabled={acting}
+            onClick={() => onReject(context)}
+            className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50 disabled:opacity-50"
+          >
+            驳回
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
