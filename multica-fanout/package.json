@@ -8,7 +8,12 @@
   },
   "scripts": {
     "start": "node bin/fanout.js",
-    "test": "node --test test/fanout.test.mjs"
+    "test": "node --test test/fanout.test.mjs",
+    "server": "node server/api.mjs",
+    "web": "npm --prefix web run dev",
+    "dev": "node server/dev.mjs",
+    "web:build": "npm --prefix web run build",
+    "web:preview": "npm --prefix web run preview"
   },
   "engines": {
     "node": ">=18"
