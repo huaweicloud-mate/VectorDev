@@ -161,7 +161,10 @@ test('config：连接配置注入到每条 multica 命令（spy 验证）', () =
   );
   assert.equal(res.status, 0, res.stderr);
   const log = fs.readFileSync(spyLog, 'utf8');
-  assert.ok(log.includes('--profile staging --workspace-id ws-123 agent list'), log);
+  // 断言注入的全局 flag 与命令都存在（顺序：--profile/--workspace-id 之后是命令）
+  assert.ok(log.includes('--profile staging'), log);
+  assert.ok(log.includes('--workspace-id ws-123'), log);
+  assert.ok(log.includes('agent list'), log);
   const agents = JSON.parse(res.stdout);
   assert.ok(Array.isArray(agents) && agents.length >= 6);
 });

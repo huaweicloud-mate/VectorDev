@@ -12,17 +12,23 @@ import { getRuntime, globalFlags } from './config.js';
 
 let BIN = process.env.MULTICA_BIN || 'multica';
 // 支持 MULTICA_BIN="node /path/fake.mjs" 这种带前缀的形式（测试/代理场景）
-let [BIN_CMD, ...BIN_PREFIX] = BIN.split(/\s+/).filter(Boolean);
+const [BIN_CMD, ...BIN_PREFIX] = BIN.split(/\s+/).filter(Boolean);
 
-function buildArgs(args) {
+/**
+ * 解析出最终的可执行命令与 argv。
+ * 注意：必须在 spawn 之前一次性求值（不能把 BIN_CMD 作为参数在 buildArgs 之后读取，
+ * 否则读到的还是更新前的旧值）。
+ */
+function resolveInvocation(args) {
   const rt = getRuntime();
-  // 运行时配置优先于环境变量（configureRuntime 已合并优先级）
+  let cmd = BIN_CMD;
+  let prefix = BIN_PREFIX;
   if (rt.multicaBin) {
     const parts = String(rt.multicaBin).split(/\s+/).filter(Boolean);
-    BIN_CMD = parts[0];
-    BIN_PREFIX = parts.slice(1);
+    cmd = parts[0];
+    prefix = parts.slice(1);
   }
-  return [...BIN_PREFIX, ...globalFlags(), ...args];
+  return { cmd, argv: [...prefix, ...globalFlags(), ...args] };
 }
 
 class MulticaError extends Error {
@@ -37,7 +43,8 @@ class MulticaError extends Error {
 
 /** 执行 multica 命令，返回 stdout 文本（不解析 JSON） */
 export function run(args, { input } = {}) {
-  const res = spawnSync(BIN_CMD, buildArgs(args), {
+  const { cmd, argv } = resolveInvocation(args);
+  const res = spawnSync(cmd, argv, {
     encoding: 'utf8',
     input,
     maxBuffer: 32 * 1024 * 1024,
@@ -45,7 +52,7 @@ export function run(args, { input } = {}) {
   });
 
   if (res.error) {
-    throw new MulticaError(`无法执行 ${BIN_CMD}：${res.error.message}`, { cmd: args.join(' ') });
+    throw new MulticaError(`无法执行 ${cmd}：${res.error.message}`, { cmd: args.join(' ') });
   }
   if (res.status !== 0) {
     throw new MulticaError(
