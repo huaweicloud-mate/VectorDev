@@ -24,6 +24,8 @@ VectorDev/
 | 架构与技术决策 | [`ForAgentDev/03-架构说明.md`](ForAgentDev/03-架构说明.md) |
 | 代码风格与提交规范 | [`ForAgentDev/04-代码规范.md`](ForAgentDev/04-代码规范.md) |
 | 多人/多 Agent 协作规则 | [`ForAgentDev/05-协作规则.md`](ForAgentDev/05-协作规则.md) |
+| 阶段一总结（功能/架构图/踩坑） | [`ForAgentDev/06-阶段一总结.md`](ForAgentDev/06-阶段一总结.md) |
+| 阶段二公网化设计方案 | [`ForAgentDev/07-公网化设计方案.md`](ForAgentDev/07-公网化设计方案.md) |
 | multica-fanout 使用手册 | [`multica-fanout/README.md`](multica-fanout/README.md) |
 
 ## 核心原则
