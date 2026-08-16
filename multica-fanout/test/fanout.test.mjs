@@ -6,9 +6,11 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { resolveAgents } from '../src/dispatch.js';
 import { slugify, agentKey, buildSubtaskDescription, buildAggregateSummary } from '../src/templates.js';
+import { resolveRuntime } from '../src/config.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const FAKE = path.join(ROOT, 'test', 'fake-multica.mjs');
+const SPY = path.join(ROOT, 'test', 'spy-multica.mjs');
 let tmpDir;
 
 /** 模拟用户运行 fanout CLI（封装层内部通过 MULTICA_BIN 调 fake） */
@@ -92,6 +94,76 @@ test('buildAggregateSummary 合并 N 份产出', () => {
   assert.ok(s.includes('**2** 份独立产出'));
   assert.ok(s.includes('产出A'));
   assert.ok(s.includes('未在评论中提供产出'));
+});
+
+// ------------------------------------------------------------
+// 配置接入：resolveRuntime 优先级 + 全局 flag 注入
+// ------------------------------------------------------------
+test('config：resolveRuntime 优先级 CLI > env > 配置文件', () => {
+  const cfgFile = path.join(tmpDir, 'cfg.json');
+  fs.writeFileSync(
+    cfgFile,
+    JSON.stringify({ profile: 'file-profile', workspaceId: 'file-ws', serverUrl: 'https://file.example.com', multicaBin: 'file-bin' }),
+    'utf8',
+  );
+
+  // 只有配置文件
+  const only = resolveRuntime({ config: cfgFile });
+  assert.equal(only.profile, 'file-profile');
+  assert.equal(only.workspaceId, 'file-ws');
+  assert.equal(only.serverUrl, 'https://file.example.com');
+
+  // env 覆盖文件
+  const oldEnv = { ...process.env };
+  process.env.MULTICA_PROFILE = 'env-profile';
+  process.env.MULTICA_WORKSPACE_ID = 'env-ws';
+  const withEnv = resolveRuntime({ config: cfgFile });
+  assert.equal(withEnv.profile, 'env-profile');
+  assert.equal(withEnv.workspaceId, 'env-ws');
+  assert.equal(withEnv.serverUrl, 'https://file.example.com'); // env 未设置 → 文件值
+  Object.assign(process.env, oldEnv);
+
+  // CLI 覆盖 env
+  const withCli = resolveRuntime({ config: cfgFile, profile: 'cli-profile', serverUrl: 'https://cli.example.com' });
+  assert.equal(withCli.profile, 'cli-profile');
+  assert.equal(withCli.serverUrl, 'https://cli.example.com');
+});
+
+test('config：fanout config 命令能生成模板并显示生效配置', () => {
+  const cfgPath = path.join(tmpDir, 'multica.config.json');
+  const r1 = runFanout(['config', '--init', cfgPath]);
+  assert.equal(r1.status, 0, r1.stderr + r1.stdout);
+  assert.ok(fs.existsSync(cfgPath));
+  const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  assert.ok('multicaBin' in parsed && 'workspaceId' in parsed && 'serverUrl' in parsed);
+
+  const r2 = runFanout(['config', '--json']);
+  assert.equal(r2.status, 0, r2.stderr);
+  const shown = JSON.parse(r2.stdout);
+  assert.ok('configFile' in shown && 'profile' in shown && 'workspaceId' in shown);
+});
+
+test('config：连接配置注入到每条 multica 命令（spy 验证）', () => {
+  // 通过 spy 记录完整 argv（写入 SPY_LOG），验证 --profile/--workspace-id 注入
+  const spyLog = path.join(tmpDir, 'spy.log');
+  const res = spawnSync(
+    process.execPath,
+    [path.join(ROOT, 'bin', 'fanout.js'), 'agents', '--profile', 'staging', '--workspace-id', 'ws-123', '--json'],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        MULTICA_BIN: `${process.execPath} ${SPY}`,
+        SPY_LOG: spyLog,
+        FAKE_STATE_FILE: path.join(tmpDir, 'state.json'),
+      },
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  const log = fs.readFileSync(spyLog, 'utf8');
+  assert.ok(log.includes('--profile staging --workspace-id ws-123 agent list'), log);
+  const agents = JSON.parse(res.stdout);
+  assert.ok(Array.isArray(agents) && agents.length >= 6);
 });
 
 // ------------------------------------------------------------

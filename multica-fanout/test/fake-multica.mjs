@@ -23,7 +23,17 @@ function uuid() {
   return '00000000-0000-4000-8000-' + Math.random().toString(16).slice(2, 14);
 }
 
-const args = process.argv.slice(2);
+const args0 = process.argv.slice(2);
+// 过滤前置的全局连接 flag（--profile/--workspace-id/--server-url 由 fanout 注入到命令前）
+const GLOBAL_FLAGS = new Set(['--profile', '--workspace-id', '--server-url']);
+const args = [];
+for (let i = 0; i < args0.length; i++) {
+  if (GLOBAL_FLAGS.has(args0[i])) {
+    i++; // 跳过 flag 及其值
+    continue;
+  }
+  args.push(args0[i]);
+}
 // 命令键：issue comment add/list 是 3 段，其余用前 2 段
 const head2 = args.slice(0, 2).join(' ');
 const head3 = args.slice(0, 3).join(' ');

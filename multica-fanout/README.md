@@ -34,7 +34,34 @@ npm install          # 安装依赖
 npm link             # 可选：全局暴露 `fanout` 命令
 ```
 
-### 3. 体检环境
+### 3. 配置连接（连你的 Multica）
+
+```bash
+fanout config --init            # 生成 multica.config.json 模板
+```
+
+编辑 `multica.config.json`（**实际配置文件已被 gitignore，不会提交**；模板见 `multica.config.example.json`）：
+
+```json
+{
+  "multicaBin": "multica",          // multica 命令，一般不用改
+  "profile": "",                    // multica CLI profile 名（可选，对应 ~/.multica/profiles/<name>）
+  "workspaceId": "",                // 工作区 ID：multica workspace list --output json 查询
+  "serverUrl": ""                   // 自托管服务地址，如 https://api.example.com；Multica Cloud 留空
+}
+```
+
+> **token 不写进配置文件**——用 `multica login` 登录（或 `multica setup self-host --server-url ... --app-url ...`）。
+> 优先级：命令行参数 > 环境变量（`MULTICA_PROFILE` / `MULTICA_WORKSPACE_ID` / `MULTICA_SERVER_URL` / `MULTICA_BIN`）> 配置文件。
+
+验证连接：
+
+```bash
+fanout config        # 查看当前生效的配置
+fanout doctor        # 验证 multica 可用 + 登录 + 工作区智能体
+```
+
+### 4. 体检环境
 
 ```bash
 fanout doctor
@@ -42,7 +69,7 @@ fanout doctor
 # ✓ 工作区智能体（6 个）：codex / claude / gemini / ...
 ```
 
-### 4. 一键派发：1 个任务 → 6 个 Agent 并行
+### 5. 一键派发：1 个任务 → 6 个 Agent 并行
 
 ```bash
 fanout dispatch \
@@ -56,7 +83,7 @@ fanout dispatch \
 - 6 个子 Issue（`MUL-101..106`）各分配一个 Agent，全部 `todo` **立即并行执行**；
 - 每个子 Issue 描述含：完整背景 + 独立视角编号 + 产出规范（隔离目录 `output/<agent>/`、统一文件名 `view-<n>-<agent>.md`、评论回贴要求）。
 
-### 5. 查看并行进度
+### 6. 查看并行进度
 
 ```bash
 fanout status MUL-100
@@ -65,7 +92,7 @@ fanout status MUL-100
 # ⏳ MUL-106 [todo] ... cursor
 ```
 
-### 6. 聚合结果
+### 7. 聚合结果
 
 ```bash
 fanout aggregate MUL-100 --out-dir ./results
@@ -79,11 +106,22 @@ fanout aggregate MUL-100 --out-dir ./results
 
 | 命令 | 说明 |
 | --- | --- |
+| `fanout config [--init [file]] [--json]` | 查看当前生效的连接配置 / 生成配置文件模板 |
 | `fanout doctor` | 体检：multica 是否可用、登录、工作区智能体 |
 | `fanout agents [--json]` | 列出可派发的智能体 |
 | `fanout dispatch --title <t> --agents a,b,c [--description-file f] [--viewpoints v1,v2] [--status todo] [--stage 1] [--priority P] [--project P] [--json]` | fan-out 并行派发 |
 | `fanout status <parent-id> [--json]` | 子任务进度聚合 |
 | `fanout aggregate <parent-id> [--out-dir d] [--no-wait] [--poll-interval ms] [--timeout ms] [--json]` | 收集产出并回写父 Issue |
+
+全局连接选项（任何命令后可用）：
+
+| 选项 | 说明 |
+| --- | --- |
+| `--config <file>` | 配置文件路径（默认 `./multica.config.json` 或 `~/.multica-fanout.json`） |
+| `--profile <name>` | multica CLI profile 名 |
+| `--workspace-id <id>` | workspace ID（`multica workspace list --output json` 查询） |
+| `--server-url <url>` | 自托管服务地址（Multica Cloud 无需） |
+| `--multica-bin <cmd>` | multica 命令（默认 `multica`，支持带前缀如 `node fake.mjs`） |
 
 参数说明：
 
@@ -110,7 +148,7 @@ fanout aggregate MUL-100 --out-dir ./results
 npm test
 ```
 
-覆盖：dispatch（1 父 + 6 子）、status 聚合、aggregate 收集/回写、Agent 名称匹配、模板生成。
+覆盖：dispatch（1 父 + 6 子）、status 聚合、aggregate 收集/回写、Agent 名称匹配、模板生成、**连接配置注入**（spy 验证全局 flag 注入到每条命令）。
 
 ## 技术栈
 

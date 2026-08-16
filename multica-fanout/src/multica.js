@@ -1,15 +1,29 @@
 import { spawnSync } from 'node:child_process';
+import { getRuntime, globalFlags } from './config.js';
 
 /**
  * Multica CLI 封装层
  * 通过 spawn 调用本机已安装的 `multica` 命令，统一 JSON 解析与错误处理。
  * 所有函数均为同步（CLI 场景，简单可靠）。
+ *
+ * 连接配置（profile/workspace/server-url）由 src/config.js 注入，
+ * 会附加到每条 multica 命令的全局 flag 上。
  */
 
-const BIN = process.env.MULTICA_BIN || 'multica';
+let BIN = process.env.MULTICA_BIN || 'multica';
 // 支持 MULTICA_BIN="node /path/fake.mjs" 这种带前缀的形式（测试/代理场景）
-const [BIN_CMD, ...BIN_PREFIX] = BIN.split(/\s+/).filter(Boolean);
-const buildArgs = (args) => [...BIN_PREFIX, ...args];
+let [BIN_CMD, ...BIN_PREFIX] = BIN.split(/\s+/).filter(Boolean);
+
+function buildArgs(args) {
+  const rt = getRuntime();
+  // 运行时配置优先于环境变量（configureRuntime 已合并优先级）
+  if (rt.multicaBin) {
+    const parts = String(rt.multicaBin).split(/\s+/).filter(Boolean);
+    BIN_CMD = parts[0];
+    BIN_PREFIX = parts.slice(1);
+  }
+  return [...BIN_PREFIX, ...globalFlags(), ...args];
+}
 
 class MulticaError extends Error {
   constructor(message, { cmd, code, stderr } = {}) {
@@ -31,7 +45,7 @@ export function run(args, { input } = {}) {
   });
 
   if (res.error) {
-    throw new MulticaError(`无法执行 ${BIN}：${res.error.message}`, { cmd: args.join(' ') });
+    throw new MulticaError(`无法执行 ${BIN_CMD}：${res.error.message}`, { cmd: args.join(' ') });
   }
   if (res.status !== 0) {
     throw new MulticaError(

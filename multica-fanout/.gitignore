@@ -4,3 +4,6 @@ node_modules/
 demo-results/
 output/
 results/
+# 实际连接配置（可能含内部地址），不提交；模板提交 multica.config.example.json
+multica.config.json
+~/.multica-fanout.json

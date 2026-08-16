@@ -1,0 +1,7 @@
+{
+  "$comment": "multica-fanout 连接配置。复制本文件为 multica.config.json 后填写（实际配置文件已被 gitignore，不会提交）。token 不要写在这里，请用 `multica login` 登录。",
+  "multicaBin": "multica",
+  "profile": "",
+  "workspaceId": "",
+  "serverUrl": ""
+}
