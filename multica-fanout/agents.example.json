@@ -1,0 +1,27 @@
+# ============================================================
+# 备选 Agent 配置示例
+# 用法：
+#   fanout dispatch --agents "前端组,后端组"       # 按名称（来自 multica agent list）
+#   fanout dispatch --agents-file ./agents.json    # 从本文件加载
+#
+# 视角（viewpoints）可自定义；不填时自动生成 "视角 1..N"
+# ============================================================
+
+{
+  "agents": [
+    { "name": "codex", "displayName": "Codex 实现组" },
+    { "name": "claude", "displayName": "Claude 审查组" }
+  ],
+  "defaultViewpoints": [
+    "从用户价值与体验角度评估",
+    "从技术架构与可行性角度评估",
+    "从性能与成本角度评估",
+    "从风险与合规角度评估",
+    "从落地与交付角度评估",
+    "从创新与差异化角度评估"
+  ],
+  "output": {
+    "dir": "output",
+    "filePrefix": "view"
+  }
+}

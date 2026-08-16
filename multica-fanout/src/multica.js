@@ -1,0 +1,220 @@
+import { spawnSync } from 'node:child_process';
+
+/**
+ * Multica CLI 封装层
+ * 通过 spawn 调用本机已安装的 `multica` 命令，统一 JSON 解析与错误处理。
+ * 所有函数均为同步（CLI 场景，简单可靠）。
+ */
+
+const BIN = process.env.MULTICA_BIN || 'multica';
+// 支持 MULTICA_BIN="node /path/fake.mjs" 这种带前缀的形式（测试/代理场景）
+const [BIN_CMD, ...BIN_PREFIX] = BIN.split(/\s+/).filter(Boolean);
+const buildArgs = (args) => [...BIN_PREFIX, ...args];
+
+class MulticaError extends Error {
+  constructor(message, { cmd, code, stderr } = {}) {
+    super(message);
+    this.name = 'MulticaError';
+    this.cmd = cmd;
+    this.code = code;
+    this.stderr = stderr;
+  }
+}
+
+/** 执行 multica 命令，返回 stdout 文本（不解析 JSON） */
+export function run(args, { input } = {}) {
+  const res = spawnSync(BIN_CMD, buildArgs(args), {
+    encoding: 'utf8',
+    input,
+    maxBuffer: 32 * 1024 * 1024,
+    windowsHide: true,
+  });
+
+  if (res.error) {
+    throw new MulticaError(`无法执行 ${BIN}：${res.error.message}`, { cmd: args.join(' ') });
+  }
+  if (res.status !== 0) {
+    throw new MulticaError(
+      `命令失败 (${res.status})：multica ${args.join(' ')}\n${(res.stderr || res.stdout || '').trim()}`,
+      { cmd: args.join(' '), code: res.status, stderr: res.stderr },
+    );
+  }
+  return (res.stdout || '').trim();
+}
+
+/** 执行命令并解析 JSON 输出 */
+export function runJson(args) {
+  const stdout = run(args);
+  if (!stdout) return null;
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    throw new MulticaError(`输出不是合法 JSON：multica ${args.join(' ')}\n${stdout.slice(0, 500)}`, {
+      cmd: args.join(' '),
+    });
+  }
+}
+
+/** 把输出归一化为数组（list 类命令可能是数组，也可能包一层） */
+function asArray(data) {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') {
+    for (const key of ['issues', 'items', 'results', 'agents', 'comments', 'children', 'data']) {
+      if (Array.isArray(data[key])) return data[key];
+    }
+  }
+  return [];
+}
+
+// ------------------------------------------------------------
+// 基础能力检查
+// ------------------------------------------------------------
+
+export function checkAvailable() {
+  try {
+    return run(['version']);
+  } catch (e) {
+    throw new MulticaError(
+      [
+        '未检测到 multica CLI。请先安装并登录：',
+        '  macOS/Linux: curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash',
+        '  Windows PowerShell: irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex',
+        '  然后运行 multica setup 完成登录。',
+      ].join('\n'),
+    );
+  }
+}
+
+export function authStatus() {
+  const data = runJson(['auth', 'status', '--output', 'json']);
+  return data;
+}
+
+// ------------------------------------------------------------
+// Agent
+// ------------------------------------------------------------
+
+/** 列出工作区智能体：multica agent list --output json */
+export function agentList() {
+  const data = runJson(['agent', 'list', '--output', 'json']);
+  return asArray(data);
+}
+
+// ------------------------------------------------------------
+// Issue
+// ------------------------------------------------------------
+
+/**
+ * 创建 issue
+ * @param {object} opts
+ * @param {string} opts.title 必填
+ * @param {string} [opts.description] 描述（与 descriptionFile 二选一）
+ * @param {string} [opts.descriptionFile] 从文件读描述
+ * @param {string} [opts.status] backlog|todo|in_progress|...
+ * @param {string} [opts.assignee] 负责人名称（成员/智能体/小队，模糊匹配）
+ * @param {string} [opts.parent] 父 issue key 或 UUID
+ * @param {string} [opts.stage] 子 issue 阶段（1/2/3）
+ * @param {string} [opts.priority] 优先级
+ * @param {string} [opts.project] 项目
+ */
+export function issueCreate(opts = {}) {
+  const args = ['issue', 'create', '--title', opts.title];
+  if (opts.description) {
+    // 长描述走 stdin，避免引号/换行转义问题
+    return runWithInput(args, { description: opts.description, ...opts });
+  }
+  if (opts.descriptionFile) {
+    args.push('--description-file', opts.descriptionFile);
+  }
+  if (opts.status) args.push('--status', opts.status);
+  if (opts.assignee) args.push('--assignee', opts.assignee);
+  if (opts.parent) args.push('--parent', opts.parent);
+  if (opts.stage != null) args.push('--stage', String(opts.stage));
+  if (opts.priority) args.push('--priority', opts.priority);
+  if (opts.project) args.push('--project', opts.project);
+  return runJson(args);
+}
+
+function runWithInput(args, { description, ...opts }) {
+  const out = [...args];
+  out.push('--description-stdin');
+  if (opts.status) out.push('--status', opts.status);
+  if (opts.assignee) out.push('--assignee', opts.assignee);
+  if (opts.parent) out.push('--parent', opts.parent);
+  if (opts.stage != null) out.push('--stage', String(opts.stage));
+  if (opts.priority) out.push('--priority', opts.priority);
+  if (opts.project) out.push('--project', opts.project);
+  return runJsonWithInput(out, description);
+}
+
+function runJsonWithInput(args, input) {
+  const stdout = run(args, { input });
+  try {
+    return stdout ? JSON.parse(stdout) : null;
+  } catch {
+    throw new MulticaError(`输出不是合法 JSON：multica ${args.join(' ')}\n${stdout.slice(0, 500)}`);
+  }
+}
+
+/**
+ * 分配负责人
+ * @param {string} id issue key 或 UUID
+ * @param {object} opts { to: 名称, toId: UUID } 优先 toId
+ */
+export function issueAssign(id, opts = {}) {
+  const args = ['issue', 'assign', id];
+  if (opts.toId) args.push('--to-id', opts.toId);
+  else if (opts.to) args.push('--to', opts.to);
+  else args.push('--unassign');
+  return runJson(args);
+}
+
+/** 查看单个 issue */
+export function issueGet(id) {
+  return runJson(['issue', 'get', id]);
+}
+
+/** 列出 issue（可按状态/负责人过滤） */
+export function issueList(opts = {}) {
+  const args = ['issue', 'list', '--output', 'json'];
+  if (opts.status) args.push('--status', opts.status);
+  if (opts.assignee) args.push('--assignee', opts.assignee);
+  if (opts.limit) args.push('--limit', String(opts.limit));
+  const data = runJson(args);
+  return asArray(data);
+}
+
+/** 列出子 issue（按阶段分组） */
+export function issueChildren(id) {
+  const data = runJson(['issue', 'children', id]);
+  return data; // 结构可能是 { 1: [...], 2: [...] } 或数组，原样返回
+}
+
+/** 评论列表 */
+export function issueCommentList(id, opts = {}) {
+  const args = ['issue', 'comment', 'list', id, '--output', 'json'];
+  if (opts.tail) args.push('--tail', String(opts.tail));
+  const data = runJson(args);
+  return asArray(data);
+}
+
+/** 添加评论（长内容走 stdin） */
+export function issueCommentAdd(id, { content, contentFile } = {}) {
+  const args = ['issue', 'comment', 'add', id];
+  if (content != null) {
+    args.push('--content-stdin');
+    return runJsonWithInput(args, content);
+  }
+  if (contentFile) {
+    args.push('--content-file', contentFile);
+    return runJson(args);
+  }
+  throw new MulticaError('issueCommentAdd 需要 content 或 contentFile');
+}
+
+/** 修改状态 */
+export function issueStatus(id, status) {
+  return runJson(['issue', 'status', id, status]);
+}
+
+export { MulticaError };

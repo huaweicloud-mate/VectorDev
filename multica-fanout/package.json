@@ -1,0 +1,20 @@
+{
+  "name": "multica-fanout",
+  "version": "0.1.0",
+  "description": "基于 Multica CLI 的团队多 Agent 并行派发工具：1 个父 Issue + N 个子 Issue 多视角并行执行",
+  "type": "module",
+  "bin": {
+    "fanout": "bin/fanout.js"
+  },
+  "scripts": {
+    "start": "node bin/fanout.js",
+    "test": "node --test test/fanout.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0"
+  }
+}

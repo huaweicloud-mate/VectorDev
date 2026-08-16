@@ -1,0 +1,6 @@
+node_modules/
+*.log
+.fake-multica-state.json
+demo-results/
+output/
+results/
